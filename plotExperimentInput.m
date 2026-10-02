@@ -14,10 +14,6 @@ dataFolder = 'C:\Users\jsasso\OneDrive - Syracuse University\MAE Matlab';
 % Otherwise use [min max], e.g. timeLim = [0 0.005]; voltLim = [-5 2];
 timeLim = [0 0.005];                 % X axis (time, s)
 voltLim = [-5 2];                    % Y axis (voltage, V)
-
-% ---- FFT plot axis limits (Frequency vs. Voltage) ----
-freqLim    = [];                     % X axis (frequency, Hz)
-fftVoltLim = [];                     % Y axis (voltage, V)
 %% =========================================================
 
 dataFolder = findDataFolder(dataFolder);
@@ -61,8 +57,8 @@ xlabel('Frequency (Hz)');
 ylabel('Voltage (V)');
 title(sprintf('Experiment %d: Frequency vs. Voltage', expNum));
 grid on;
-xlim(getLimits(f,  freqLim));
-ylim(getLimits(vf, fftVoltLim));
+xlim(getLimits(f,  []));
+ylim(getLimits(vf, []));
 
 %% Local function: autoscale to data min/max unless limits are given
 function lim = getLimits(x, userLim)
