@@ -26,7 +26,8 @@ ideal = A * sign(sin(w0*t));
 bn = @(n) (K ./ (2*pi*n)) .* (1 - (-1).^n);   % zero for even n
 an = @(n) zeros(size(n));                      % a_n = 0 for all n
 
-%% Build partial sums (one figure per n value)
+%% Build partial sums (6 subplots in one figure, one per n value)
+figure('Name', 'Square wave partial sums');
 for k = 1:numel(Nlist)
     N = Nlist(k);
     f = zeros(size(t));                 % a_0/2 = 0
@@ -34,14 +35,14 @@ for k = 1:numel(Nlist)
         f = f + an(n)*cos(n*w0*t) + bn(n)*sin(n*w0*t);
     end
 
-    figure; hold on; grid on;
+    subplot(3, 2, k); hold on; grid on;
     plot(t*1000, ideal, 'k--', 'LineWidth', 1.2, 'DisplayName', 'Ideal square wave');
     plot(t*1000, f, 'b', 'LineWidth', 1.6, ...
          'DisplayName', sprintf('n up to %d', N));
 
     xlabel('Time (ms)');
     ylabel('Voltage (V)');
-    title(sprintf('Partial sum reconstruction of the square wave (n = %d)', N));
+    title(sprintf('Partial sum, n = %d', N));
     legend('Location', 'best');
     ylim([-1.9 1.9]);
     hold off;
