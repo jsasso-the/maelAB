@@ -20,8 +20,8 @@ showFreqDomain = true;         % Frequency vs. Voltage (FFT file)
 showNyquist    = true;         % Nyquist (folding) diagram
 
 % ---- Nyquist diagram inputs (both in Hz) ----
-signal = 1200;                 % signal frequency [Hz]
-source = 1000;                 % sample frequency [Hz]
+signal = 750;                  % signal frequency [Hz]
+source = 25000;                % sample frequency [Hz]
 
 % ---- DAT plot axis limits (override) ----
 % Leave as [] to autoscale to the min/max of the data.
@@ -117,87 +117,86 @@ function lim = getLimits(x, userLim)
 end
 
 %% Local function: Nyquist folding diagram
-% The frequency axis is folded back and forth at multiples of the Nyquist
-% frequency fN = fs/2. Rung k covers k*fN .. (k+1)*fN; even rungs run
-% left->right, odd rungs run right->left. The signal frequency is marked on
-% its rung and projected straight down to rung 0 to read the alias frequency.
+% Zig-zag of the frequency axis folded at multiples of fN = fs/2:
+%   level m (y = m) is a horizontal rung from 2m*fN (left) to (2m+1)*fN (right),
+%   and a diagonal runs from (2m+1)*fN back up-left to 2(m+1)*fN on the next level.
+% A frequency on any segment aliases to the frequency directly below it on
+% the bottom rung (0 .. fN).
 function plotNyquist(ax, fSig, fs)
     if fs <= 0,   error('Sample frequency (source) must be > 0 Hz.'); end
     if fSig < 0,  error('Signal frequency (signal) must be >= 0 Hz.'); end
 
     fN = fs/2;
+    [uScale, uName] = pickUnits(fs);   % display units for labels / x axis
 
-    % Which rung the signal sits on, and where along it (0..1)
+    % Which band (k) the signal is in, and where along it (r = 0..1)
     k = floor(fSig/fN);
     r = fSig/fN - k;
-    if k > 0 && r == 0          % exactly on a fold: use end of previous rung
+    if k > 0 && r == 0          % exactly on a fold: use end of previous band
         k = k - 1;
         r = 1;
     end
-    if mod(k, 2) == 0
-        xSig = r*fN;            % even rung: left -> right
-    else
-        xSig = (1 - r)*fN;      % odd rung: right -> left
+    m = floor(k/2);             % level the signal's band starts on
+    if mod(k, 2) == 0           % horizontal rung, left -> right
+        xSig = r*fN;
+        ySig = m;
+    else                        % diagonal, right -> up-left
+        xSig = (1 - r)*fN;
+        ySig = m + r;
     end
     fAlias = xSig;
 
-    nExtra = 2;                 % extra rungs for clarity
-    nRungs = k + 1 + nExtra;
-    dy     = 1;                 % vertical spacing between rungs
-    fold   = 0.06*fN;           % how far the fold arcs stick out
+    nExtra  = 3;                % extra levels drawn above the signal for clarity
+    nLevels = m + 1 + nExtra;
+
+    % Zig-zag path: (0,0) -> (fN,0) -> (0,1) -> (fN,1) -> ...
+    xp = repmat([0 fN], 1, nLevels);
+    yp = repelem(0:nLevels-1, 2);
 
     hold(ax, 'on');
-    rungColor = [0.2 0.2 0.2];
-    for n = 0:nRungs-1
-        y = -n*dy;
-        % rung line
-        plot(ax, [0 fN], [y y], '-', 'Color', rungColor, 'LineWidth', 1.5);
-        % minor ticks every 0.1*fN
-        for xt = (0:0.1:1)*fN
-            plot(ax, [xt xt], y + [-0.05 0.05], '-', 'Color', rungColor);
-        end
-        % end labels (frequency at each end of this rung)
-        if mod(n, 2) == 0
-            fLeft = n*fN;     fRight = (n+1)*fN;
-        else
-            fLeft = (n+1)*fN; fRight = n*fN;
-        end
-        text(ax, -fold*1.5, y, sprintf('%s', fmtHz(fLeft)), ...
+    plot(ax, xp/uScale, yp, '-', 'LineWidth', 2, 'Color', [0 0.3 0.6]);
+
+    % Level labels: left end = 2m*fN, right end = (2m+1)*fN
+    dx = 0.08*fN/uScale;
+    for lv = 0:nLevels-1
+        text(ax, -dx, lv, fmtFreq(2*lv*fN, uScale, uName), ...
             'HorizontalAlignment', 'right', 'VerticalAlignment', 'middle');
-        text(ax, fN + fold*1.5, y, sprintf('%s', fmtHz(fRight)), ...
+        text(ax, fN/uScale + dx, lv, fmtFreq((2*lv+1)*fN, uScale, uName), ...
             'HorizontalAlignment', 'left', 'VerticalAlignment', 'middle');
-        % fold arc to the next rung (right side after even, left after odd)
-        if n < nRungs-1
-            th = linspace(-pi/2, pi/2, 30);
-            yc = y - dy/2;
-            if mod(n, 2) == 0
-                plot(ax, fN + fold*cos(th), yc + (dy/2)*sin(th), ':', 'Color', rungColor);
-            else
-                plot(ax, -fold*cos(th), yc + (dy/2)*sin(th), ':', 'Color', rungColor);
-            end
-        end
     end
 
-    % Signal frequency marker and projection down to rung 0
-    ySig = -k*dy;
-    if k > 0
-        plot(ax, [xSig xSig], [ySig 0], 'r--', 'LineWidth', 1.2);
-    end
-    plot(ax, xSig, ySig, 'ro', 'MarkerFaceColor', 'r', 'MarkerSize', 8);
-    text(ax, xSig, ySig - 0.25*dy, sprintf('f = %s', fmtHz(fSig)), ...
-        'Color', 'r', 'HorizontalAlignment', 'center', 'VerticalAlignment', 'top');
-    plot(ax, fAlias, 0, 'bs', 'MarkerFaceColor', 'b', 'MarkerSize', 8);
-    text(ax, fAlias, 0.25*dy, sprintf('f_a = %s', fmtHz(fAlias)), ...
-        'Color', 'b', 'HorizontalAlignment', 'center', 'VerticalAlignment', 'bottom');
+    % Signal frequency marker
+    plot(ax, xSig/uScale, ySig, '*', 'Color', 'b', 'MarkerSize', 12, 'LineWidth', 1.5);
+    text(ax, xSig/uScale, ySig + 0.08, ['  ' fmtFreq(fSig, 1, 'Hz')], ...
+        'Rotation', 45, 'Color', 'b', 'HorizontalAlignment', 'left', ...
+        'VerticalAlignment', 'bottom');
 
+    % If the signal is above fN, project it down to the bottom rung (alias)
+    if fSig > fN
+        plot(ax, [xSig xSig]/uScale, [ySig 0], 'r--', 'LineWidth', 1.2);
+        plot(ax, fAlias/uScale, 0, 'ro', 'MarkerFaceColor', 'r', 'MarkerSize', 7);
+        text(ax, fAlias/uScale, -0.08, ['  ' fmtFreq(fAlias, 1, 'Hz') ' (alias)'], ...
+            'Rotation', -45, 'Color', 'r', 'HorizontalAlignment', 'left', ...
+            'VerticalAlignment', 'top');
+    end
     hold(ax, 'off');
-    xlim(ax, [-0.35*fN 1.35*fN]);
-    ylim(ax, [-(nRungs-1)*dy - 0.75*dy, 0.75*dy]);
-    axis(ax, 'off');
-    title(ax, sprintf('Nyquist Diagram  (f_s = %s,  f_N = %s,  f_a = %s)', ...
-        fmtHz(fs), fmtHz(fN), fmtHz(fAlias)));
+
+    xlim(ax, [-0.25*fN 1.3*fN]/uScale);
+    ylim(ax, [-1, nLevels - 0.5]);
+    box(ax, 'on');
+    title(ax, 'Nyquist Diagram');
 end
 
-function s = fmtHz(x)
-    s = sprintf('%g Hz', x);
+function [scale, name] = pickUnits(f)
+    if f >= 1e6
+        scale = 1e6; name = 'MHz';
+    elseif f >= 1e3
+        scale = 1e3; name = 'kHz';
+    else
+        scale = 1;   name = 'Hz';
+    end
+end
+
+function s = fmtFreq(f, scale, name)
+    s = sprintf('%g %s', f/scale, name);
 end
