@@ -38,20 +38,19 @@ vf = fftData(:,2);   % voltage [V]
 %% Plot both in the same figure window
 fig = figure('Name', sprintf('Experiment %d', expNum), 'NumberTitle', 'off', ...
              'Position', [100 100 1150 750]);
-sgtitle(fig, sprintf('Experiment %d', expNum));
 
 axTime = axes(fig, 'Position', [0.07 0.57 0.62 0.35]);
 plot(axTime, t, vt, 'LineWidth', 1.2);
 xlabel(axTime, 'Time (s)');
 ylabel(axTime, 'Voltage (V)');
-title(axTime, 'Time vs. Voltage');
+title(axTime, sprintf('Experiment %d: Time vs. Voltage', expNum));
 grid(axTime, 'on');
 
 axFreq = axes(fig, 'Position', [0.07 0.08 0.62 0.35]);
 plot(axFreq, f, vf, 'LineWidth', 1.2);
 xlabel(axFreq, 'Frequency (Hz)');
 ylabel(axFreq, 'Voltage (V)');
-title(axFreq, 'Frequency vs. Voltage');
+title(axFreq, sprintf('Experiment %d: Frequency vs. Voltage', expNum));
 grid(axFreq, 'on');
 
 % Editable limit boxes (pre-filled with the automatic limits)
@@ -72,13 +71,13 @@ function addLimitControls(fig, ax, pos, name, x, y)
                 'Position', pos, 'FontSize', 10);
     labels = {'X min', 'X max', 'Y min', 'Y max'};
     rowY   = [0.78 0.60 0.42 0.24];
-    eb = gobjects(1, 4);
+    eb = [];
     for k = 1:4
         uicontrol(p, 'Style', 'text', 'String', labels{k}, 'Units', 'normalized', ...
                   'Position', [0.05 rowY(k) 0.35 0.12], ...
                   'HorizontalAlignment', 'left', 'FontSize', 10);
-        eb(k) = uicontrol(p, 'Style', 'edit', 'Units', 'normalized', ...
-                          'Position', [0.42 rowY(k)+0.01 0.53 0.13], 'FontSize', 10);
+        eb = [eb uicontrol(p, 'Style', 'edit', 'Units', 'normalized', ...
+                          'Position', [0.42 rowY(k)+0.01 0.53 0.13], 'FontSize', 10)];
     end
 
     autoX = dataLimits(x);
@@ -90,9 +89,6 @@ function addLimitControls(fig, ax, pos, name, x, y)
 
     resetLimits(ax, eb, autoX, autoY);
 
-    % Keep the boxes in sync if the plot is zoomed/panned with the mouse
-    addlistener(ax, 'XLim', 'PostSet', @(~,~) showLimits(ax, eb));
-    addlistener(ax, 'YLim', 'PostSet', @(~,~) showLimits(ax, eb));
 end
 
 function applyLimits(ax, eb)
@@ -115,9 +111,9 @@ function resetLimits(ax, eb, autoX, autoY)
 end
 
 function showLimits(ax, eb)
-    lims = [ax.XLim ax.YLim];
+    lims = [get(ax, 'XLim') get(ax, 'YLim')];
     for k = 1:4
-        eb(k).String = sprintf('%.6g', lims(k));
+        set(eb(k), 'String', sprintf('%.6g', lims(k)));
     end
 end
 
