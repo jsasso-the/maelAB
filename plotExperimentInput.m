@@ -1,8 +1,6 @@
 % Asks for an experiment number, then plots in one figure window:
 %   Top:    Time vs. Voltage       (from 9_17_2026jamesXdat.txt)
 %   Bottom: Frequency vs. Voltage  (from 9_17_2026jamesXfft.txt)
-% Axes start autoscaled to the data; you can then type min/max values to
-% change any axis (press Enter to keep the current value).
 % Each file: tab-delimited, 1 header line, 2 columns.
 clear; clc; close all;
 
@@ -10,6 +8,14 @@ clear; clc; close all;
 % Folder containing the .txt files. If it doesn't exist, the script looks
 % for a "MAE Matlab" folder next to this script / in the current folder.
 dataFolder = 'C:\Users\jsasso\OneDrive - Syracuse University\MAE Matlab';
+
+% ---- Axis limits ----
+% Leave as [] to autoscale to the data.
+% Otherwise use [min max], e.g. timeLim = [0 0.01];
+timeLim     = [];   % Time plot, x axis (s)
+timeVoltLim = [];   % Time plot, y axis (V)
+freqLim     = [];   % Frequency plot, x axis (Hz)
+freqVoltLim = [];   % Frequency plot, y axis (V)
 %% =========================================================
 
 dataFolder = findDataFolder(dataFolder);
@@ -46,8 +52,8 @@ xlabel(axTime, 'Time (s)');
 ylabel(axTime, 'Voltage (V)');
 title(axTime, 'Time vs. Voltage');
 grid(axTime, 'on');
-xlim(axTime, dataLimits(t));
-ylim(axTime, dataLimits(vt));
+xlim(axTime, getLimits(t,  timeLim));
+ylim(axTime, getLimits(vt, timeVoltLim));
 
 axFreq = nexttile(tl);
 plot(axFreq, f, vf, 'LineWidth', 1.2);
@@ -55,72 +61,18 @@ xlabel(axFreq, 'Frequency (Hz)');
 ylabel(axFreq, 'Voltage (V)');
 title(axFreq, 'Frequency vs. Voltage');
 grid(axFreq, 'on');
-xlim(axFreq, dataLimits(f));
-ylim(axFreq, dataLimits(vf));
+xlim(axFreq, getLimits(f,  freqLim));
+ylim(axFreq, getLimits(vf, freqVoltLim));
 
-drawnow;   % show the default-scaled plots before asking about limits
-
-%% Let the user change the axis limits
-fprintf('\nThe plots are shown with default (autoscaled) axes.\n');
-while true
-    choice = lower(strtrim(input('Edit axis limits? (y/n): ', 's')));
-    if ~strcmp(choice, 'y'), break; end
-
-    fprintf('\n--- Time vs. Voltage plot ---\n');
-    editLimits(axTime, 'x', 'Time (s)');
-    editLimits(axTime, 'y', 'Voltage (V)');
-
-    fprintf('\n--- Frequency vs. Voltage plot ---\n');
-    editLimits(axFreq, 'x', 'Frequency (Hz)');
-    editLimits(axFreq, 'y', 'Voltage (V)');
-
-    drawnow;
-    fprintf('\n');
-end
-fprintf('Done.\n');
-
-%% Local function: [min max] of the data (padded if the data is flat)
-function lim = dataLimits(x)
-    lim = [min(x) max(x)];
-    if lim(1) == lim(2)
-        lim = lim + [-1 1];
-    end
-end
-
-%% Local function: prompt for new min/max on one axis (Enter keeps current)
-function editLimits(ax, whichAxis, label)
-    if whichAxis == 'x'
-        cur = xlim(ax);
-    else
-        cur = ylim(ax);
-    end
-
-    newMin = askNumber(sprintf('  %s min [%g]: ', label, cur(1)), cur(1));
-    newMax = askNumber(sprintf('  %s max [%g]: ', label, cur(2)), cur(2));
-    if newMin >= newMax
-        fprintf('  Min must be less than max -- keeping [%g %g].\n', cur(1), cur(2));
-        return;
-    end
-
-    if whichAxis == 'x'
-        xlim(ax, [newMin newMax]);
-    else
-        ylim(ax, [newMin newMax]);
-    end
-end
-
-function val = askNumber(prompt, default)
-    while true
-        s = strtrim(input(prompt, 's'));
-        if isempty(s)
-            val = default;
-            return;
+%% Local function: autoscale to data min/max unless limits are given
+function lim = getLimits(x, userLim)
+    if isempty(userLim)
+        lim = [min(x) max(x)];
+        if lim(1) == lim(2)
+            lim = lim + [-1 1];
         end
-        val = str2double(s);
-        if isfinite(val)
-            return;
-        end
-        fprintf('  Please enter a number (or press Enter to keep %g).\n', default);
+    else
+        lim = userLim;
     end
 end
 
