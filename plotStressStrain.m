@@ -1,12 +1,5 @@
 % Engineering stress-strain analysis for the M003 tensile test data.
-%
-% Set the material folder name(s) below and run. The script:
-%   1. finds the material folder inside  <rootFolder>\M003
-%   2. finds the .DAT file inside that folder (searches subfolders too)
-%   3. reads the data and computes stress, strain and their uncertainties
-%   4. draws one figure with the stress-strain plot and a results table
-%
-% To plot several data sets together, add more specimen blocks (k = 2, 3, ...).
+% Set the material folder name(s) below and run.
 clear; clc; close all;
 
 %% ===================== USER SETTINGS =====================
@@ -63,18 +56,22 @@ stressLim      = [];           % y axis limits, e.g. [0 400]    ([] = auto)
 legendLocation = 'best';
 
 % ---- DAT file columns ----
-% Column number, or part of the column's header text (e.g. 'Load').
+% Stress comes from the Axial Force column and strain from the Axial Strain
+% column. Columns are found by their header name (case doesn't matter), or
+% you can put a column number instead, e.g. colForce = 3.
 % printFileInfo = true prints the header and first rows of each DAT file in
 % the Command Window, so you can check which column is which.
 printFileInfo = true;
-colForce      = 2;
-colStrain     = 3;
-strainType    = 'strain';  % 'strain'    : column is strain (or % strain, see strainScale)
+colForce      = 'Axial Force';
+colStrain     = 'Axial Strain';
+strainType    = 'strain';  % 'strain'    : column is strain
                            % 'extension' : column is extension/displacement; it
                            %               is divided by the gauge length
-forceScale    = 1;         % force column x forceScale  -> N (SI) or lbf (US). kN: 1000
-strainScale   = 1;         % strain column x strainScale -> mm/mm, or -> mm / in
-                           % for 'extension'.  Strain in %: 0.01
+forceScale    = 'auto';    % 'auto' = read the force unit (N, kN, lbf, kip) from the
+                           % header. Or a number: force column x forceScale -> N (SI)
+                           % or lbf (US), e.g. 1000 for kN
+strainScale   = 'auto';    % 'auto' = strain in % is divided by 100. Or a number:
+                           % strain column x strainScale -> mm/mm
 
 % ---- Units ----
 units = 'SI';   % 'SI': N, mm, MPa, GPa, MJ/m^3     'US': lbf, in, ksi, Msi, in-lbf/in^3
@@ -115,14 +112,22 @@ for i = 1:nSpec
         [~, sp.label] = fileparts(sp.folderPath);
     end
 
-    [data, headers, headerLines] = readDat(sp.filePath);
+    [data, headers, colNames, headerLines] = readDat(sp.filePath);
     if printFileInfo
         printDatInfo(sp.filePath, data, headers, headerLines);
     end
-    iF = pickColumn(cfg.colForce,  headers, size(data, 2), 'colForce');
-    iX = pickColumn(cfg.colStrain, headers, size(data, 2), 'colStrain');
+    iF = pickColumn(cfg.colForce,  colNames, size(data, 2), 'colForce');
+    iX = pickColumn(cfg.colStrain, colNames, size(data, 2), 'colStrain');
 
-    R{i} = analyzeSpecimen(data(:, iF), data(:, iX), sp, cfg);
+    % Unit scaling for this file (from the column headers when 'auto')
+    cfgI = cfg;
+    if isempty(headers), hF = ''; hX = ''; else, hF = headers{iF}; hX = headers{iX}; end
+    if ischar(cfg.forceScale),  cfgI.forceScale  = autoForceScale(hF, cfg.U); end
+    if ischar(cfg.strainScale), cfgI.strainScale = autoStrainScale(hX); end
+    fprintf('%s: force = col %d "%s" (x%g), strain = col %d "%s" (x%g)\n', sp.label, ...
+        iF, hF, cfgI.forceScale, iX, hX, cfgI.strainScale);
+
+    R{i} = analyzeSpecimen(data(:, iF), data(:, iX), sp, cfgI);
 end
 R = [R{:}];
 
@@ -285,7 +290,7 @@ function files = listDat(folder)
     end
 end
 
-function [data, headers, headerLines] = readDat(fn)
+function [data, headers, colNames, headerLines] = readDat(fn)
 % Reads a text DAT file. Rows made only of numbers are data; everything
 % before the first data row is header. Works with tab, comma, semicolon or
 % space delimiters.
@@ -309,12 +314,13 @@ function [data, headers, headerLines] = readDat(fn)
 
     % Column names: every header line that splits into nCols pieces is
     % joined column by column (e.g. a name line + a units line -> 'Load (N)')
-    headers = {};
+    % colNames is the first of those lines only (the names without units).
+    headers = {}; colNames = {};
     for j = 1:numel(headerLines)
         tok = regexp(strtrim(headerLines{j}), '\t|,|;|\s{2,}', 'split');
         tok = strtrim(regexprep(tok, '"', ''));
         if numel(tok) == nCols
-            if isempty(headers), headers = tok;
+            if isempty(headers), headers = tok; colNames = tok;
             else, headers = strtrim(strcat(headers, {' '}, tok)); end
         end
     end
@@ -335,14 +341,22 @@ function printDatInfo(fn, data, headers, headerLines)
 end
 
 function c = pickColumn(sel, headers, nCols, settingName)
-% Column index from a number or from (part of) the column header text.
+% Column index from a number or from the column header text. Prefers an
+% exact name match (units ignored), then a header starting with the text,
+% then a header containing it.
     if isnumeric(sel)
         c = sel;
     else
         if isempty(headers)
-            error('%s = ''%s'': the DAT file has no column names. Use a column number.', settingName, sel);
+            error('%s = ''%s'': could not read column names from the DAT file. Use a column number.', ...
+                settingName, sel);
         end
-        hit = find(~cellfun(@isempty, strfind(lower(headers), lower(sel))));
+        h = lower(strtrim(headers));
+        names = strtrim(regexprep(h, '[\(\[].*$', ''));   % header without '(units)'
+        want = lower(strtrim(sel));
+        hit = find(strcmp(names, want));
+        if isempty(hit), hit = find(strncmp(h, want, numel(want))); end
+        if isempty(hit), hit = find(~cellfun(@isempty, strfind(h, want))); end
         if numel(hit) ~= 1
             error('%s = ''%s'' matches %d columns. Columns are:\n  %s', ...
                 settingName, sel, numel(hit), strjoin(headers, '\n  '));
@@ -352,6 +366,28 @@ function c = pickColumn(sel, headers, nCols, settingName)
     if c < 1 || c > nCols
         error('%s = %d, but the DAT file has %d columns.', settingName, c, nCols);
     end
+end
+
+function f = autoForceScale(h, U)
+% Factor that converts the force column to N (SI) or lbf (US), from the
+% unit written in the column header.
+    lbfPerN = 0.2248089;
+    hasUnit = @(u) ~isempty(regexp(lower(h), ['(^|[^a-z])' u '([^a-z]|$)'], 'once'));
+    if hasUnit('kn'),             toN = 1000;
+    elseif hasUnit('n'),          toN = 1;
+    elseif hasUnit('kips?'),      toN = 1000/lbfPerN;
+    elseif hasUnit('(lbf|lbs?)'), toN = 1/lbfPerN;
+    else
+        warning('No force unit found in header "%s"; using the force column as is.', h);
+        f = 1;
+        return;
+    end
+    if strcmp(U.name, 'SI'), f = toN; else, f = toN*lbfPerN; end
+end
+
+function f = autoStrainScale(h)
+% Strain in % -> divide by 100.
+    if any(h == '%'), f = 0.01; else, f = 1; end
 end
 
 function R = analyzeSpecimen(Fraw, Xraw, sp, cfg)
