@@ -64,6 +64,8 @@ legendLocation = 'best';
 printFileInfo = true;
 colForce      = 'Axial Force';
 colStrain     = 'Axial Strain';
+colDisplacement = 'Axial Displacement';  % used instead when the Axial Strain column
+                                         % is empty (all zero): strain = displacement / gauge length
 strainType    = 'strain';  % 'strain'    : column is strain
                            % 'extension' : column is extension/displacement; it
                            %               is divided by the gauge length
@@ -91,8 +93,8 @@ breakDrop      = 0.10;         % rupture = last point before stress drops by mor
 %% =========================================================
 
 %% Settings -> config struct
-cfg = struct('colForce', colForce, 'colStrain', colStrain, 'strainType', strainType, ...
-    'forceScale', forceScale, 'strainScale', strainScale, 'uForce', uForce, ...
+cfg = struct('colForce', colForce, 'colStrain', colStrain, 'colDisplacement', colDisplacement, ...
+    'strainType', strainType, 'forceScale', forceScale, 'strainScale', strainScale, 'uForce', uForce, ...
     'uStrain', uStrain, 'offsetStrain', offsetStrain, 'fitRange', fitRange, ...
     'fitStrainRange', fitStrainRange, 'breakDrop', breakDrop);
 cfg.U = unitSet(units);
@@ -124,6 +126,16 @@ for i = 1:nSpec
     if isempty(headers), hF = ''; hX = ''; else, hF = headers{iF}; hX = headers{iX}; end
     if ischar(cfg.forceScale),  cfgI.forceScale  = autoForceScale(hF, cfg.U); end
     if ischar(cfg.strainScale), cfgI.strainScale = autoStrainScale(hX); end
+
+    % No strain reading (e.g. no extensometer): use displacement / gauge length
+    if strcmpi(cfg.strainType, 'strain') && max(abs(data(:, iX) - data(1, iX))) < 1e-9
+        iX = pickColumn(cfg.colDisplacement, colNames, size(data, 2), 'colDisplacement');
+        if isempty(headers), hX = ''; else, hX = headers{iX}; end
+        cfgI.strainType  = 'extension';
+        cfgI.strainScale = autoLengthScale(hX, cfg.U);
+        warning(['%s: the strain column is all zero, so strain = "%s" / gauge length. ' ...
+            'Young''s modulus from displacement is usually lower than the true value.'], sp.label, hX);
+    end
     fprintf('%s: force = col %d "%s" (x%g), strain = col %d "%s" (x%g)\n', sp.label, ...
         iF, hF, cfgI.forceScale, iX, hX, cfgI.strainScale);
 
@@ -132,6 +144,7 @@ end
 R = [R{:}];
 
 %% Figure layout: plot on the left; table and zoom plot on the right
+if all(isnan([R.sigY])), show.zoom = false; end   % no yield point to zoom in on (brittle)
 fig = figure('Name', 'Engineering Stress-Strain', 'NumberTitle', 'off', 'Color', 'w');
 hasRight = show.table || show.zoom;
 if hasRight
@@ -161,8 +174,9 @@ if isempty(plotTitle)
 end
 title(ax, plotTitle, 'Interpreter', 'none');
 grid(ax, 'on'); box(ax, 'on');
-if ~isempty(strainLim), xlim(ax, strainLim); else, xlim(ax, [0 1.05*max([R.epsR])]); end
-if ~isempty(stressLim), ylim(ax, stressLim); else, ylim(ax, [0 1.15*max([R.sigU])]); end
+xMax = max([R.epsR]); yMax = max([R.sigU]);
+if ~isempty(strainLim), xlim(ax, strainLim); elseif xMax > 0, xlim(ax, [0 1.05*xMax]); end
+if ~isempty(stressLim), ylim(ax, stressLim); elseif yMax > 0, ylim(ax, [0 1.15*yMax]); end
 lg = legend(ax, 'Location', legendLocation, 'Interpreter', 'none');
 if isempty(get(lg, 'String')), delete(lg); end
 
@@ -171,7 +185,7 @@ if show.zoom
     az = axes(fig, 'Position', zoomPos);
     drawCurves(az, R, show, nErrorBars, cfg.U, true);
     ey = [R.epsY]; sy = [R.sigY];
-    if all(isnan(ey)), ey = 3*offsetStrain; sy = max([R.sigU]); end
+    if all(isnan(ey)), ey = min(3*offsetStrain, max([R.epsR])); sy = max([R.sigU]); end
     xlim(az, [0 2*max(ey)]);
     ylim(az, [0 1.3*max(sy)]);
     title(az, 'Zoom: elastic region and 0.2% offset');
@@ -385,6 +399,17 @@ function f = autoForceScale(h, U)
     if strcmp(U.name, 'SI'), f = toN; else, f = toN*lbfPerN; end
 end
 
+function f = autoLengthScale(h, U)
+% Factor that converts the displacement column to mm (SI) or in (US).
+    hasUnit = @(u) ~isempty(regexp(lower(h), ['(^|[^a-z])' u '([^a-z]|$)'], 'once'));
+    if hasUnit('mm'),                 toMM = 1;
+    elseif hasUnit('m'),              toMM = 1000;
+    elseif hasUnit('(in|inch|inches)'), toMM = 25.4;
+    else,                             toMM = 1;
+    end
+    if strcmp(U.name, 'SI'), f = toMM; else, f = toMM/25.4; end
+end
+
 function f = autoStrainScale(h)
 % Strain in % -> divide by 100.
     if any(h == '%'), f = 0.01; else, f = 1; end
@@ -515,6 +540,7 @@ end
 function drawCurves(ax, R, show, nErrorBars, U, isZoom)
     hold(ax, 'on');
     C = lines(max(numel(R), 1));
+    xRight = 0.6*max([R.epsR]);    % labels right of this are written to the left of the point
     for i = 1:numel(R)
         r = R(i); c = C(i, :);
         vis = 'on'; if isZoom, vis = 'off'; end
@@ -543,13 +569,16 @@ function drawCurves(ax, R, show, nErrorBars, U, isZoom)
                 r.E/1000, U.modulus), 'HandleVisibility', vis);
         end
         if show.yield && ~isnan(r.sigY)
-            plotPoint(ax, r.epsY, r.sigY, 'o', c, show.labels, 'Yield', U, isZoom);
+            plotPoint(ax, r.epsY, r.sigY, 'o', c, show.labels, 'Yield', U, isZoom, r.epsY > xRight);
+        end
+        % Brittle break: ultimate and rupture are the same point, so label it once
+        same = show.ultimate && show.rupture && abs(r.epsR - r.epsU) <= 0.01*r.epsR;
+        if show.rupture && ~isZoom
+            plotPoint(ax, r.epsR, r.sigR, 's', c, show.labels && ~same, 'Rupture', U, isZoom, r.epsR > xRight);
         end
         if show.ultimate && ~isZoom
-            plotPoint(ax, r.epsU, r.sigU, '^', c, show.labels, 'Ultimate', U, isZoom);
-        end
-        if show.rupture && ~isZoom
-            plotPoint(ax, r.epsR, r.sigR, 's', c, show.labels, 'Rupture', U, isZoom);
+            name = 'Ultimate'; if same, name = 'Ultimate = Rupture'; end
+            plotPoint(ax, r.epsU, r.sigU, '^', c, show.labels, name, U, isZoom, r.epsU > xRight);
         end
     end
 
@@ -557,7 +586,7 @@ function drawCurves(ax, R, show, nErrorBars, U, isZoom)
     if ~isZoom
         names = {'Yield (0.2% offset)', 'Ultimate', 'Rupture'};
         marks = {'o', '^', 's'};
-        on = [show.yield, show.ultimate, show.rupture];
+        on = [show.yield && any(~isnan([R.sigY])), show.ultimate, show.rupture];
         for j = find(on)
             plot(ax, NaN, NaN, marks{j}, 'MarkerEdgeColor', 'k', 'MarkerFaceColor', [0.85 0.85 0.85], ...
                 'MarkerSize', 8, 'LineStyle', 'none', 'DisplayName', names{j});
@@ -569,11 +598,13 @@ function drawCurves(ax, R, show, nErrorBars, U, isZoom)
     hold(ax, 'off');
 end
 
-function plotPoint(ax, x, y, marker, c, withLabel, name, U, isZoom)
+function plotPoint(ax, x, y, marker, c, withLabel, name, U, isZoom, labelLeft)
     plot(ax, x, y, marker, 'MarkerSize', 8, 'MarkerFaceColor', c, ...
         'MarkerEdgeColor', 'k', 'LineWidth', 1, 'HandleVisibility', 'off');
     if withLabel && ~isZoom
-        text(ax, x, y, sprintf('  %s: %.4g %s', name, y, U.stress), ...
+        txt = sprintf('%s: %.4g %s', name, y, U.stress);
+        if labelLeft, txt = [txt '  ']; align = 'right'; else, txt = ['  ' txt]; align = 'left'; end
+        text(ax, x, y, txt, 'HorizontalAlignment', align, ...
             'VerticalAlignment', 'bottom', 'FontSize', 9, 'Color', 0.7*c);
     end
 end
@@ -606,18 +637,19 @@ function [rows, D] = buildTable(R, U)
             pm(w(1), w(2)); pm(t(1), t(2)); pm(d(1), d(2)); ...
             pm(r.gaugeLength(1), r.gaugeLength(2)); pm(r.A, r.uA); ...
             pm(r.Fmax, r.uFmax); pm(r.E/1000, r.uE/1000); ...
-            pm(r.sigY, r.uSigY); pm(r.epsY, r.uEpsY); ...
+            pm(r.sigY, r.uSigY, 'no yield'); pm(r.epsY, r.uEpsY, 'no yield'); ...
             pm(r.sigU, r.uSigU); pm(r.epsU, r.uEpsU); ...
             pm(r.sigR, r.uSigR); pm(r.epsR, r.uEpsR); ...
-            pm(r.Ur, r.uUr); pm(r.Ut, r.uUt)};
+            pm(r.Ur, r.uUr, 'no yield'); pm(r.Ut, r.uUt)};
     end
 end
 
-function s = pm(v, u)
-% 'value ± uncertainty', uncertainty rounded to 2 significant figures and
+function s = pm(v, u, missing)
+% 'value +/- uncertainty', uncertainty rounded to 2 significant figures and
 % the value rounded to the same decimal place.
     if isnan(v)
-        s = '-';
+        if nargin < 3, missing = '-'; end
+        s = missing;
     elseif isnan(u) || u == 0
         s = sprintf('%.4g', v);
     else
