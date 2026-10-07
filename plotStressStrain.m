@@ -26,11 +26,13 @@ datFileName = '';              % '' = find the .dat file automatically, or e.g. 
 specimenArea = [];
 
 % ---- Strain ----
-% 'strain'       = Axial Strain column (extensometer, in/in)
-% 'displacement' = Axial Displacement / gaugeLength (use if the extensometer
-%                  was not attached and the strain column is flat)
-strainSource = 'strain';
-gaugeLength  = 2.0;            % [in], only used when strainSource = 'displacement'
+% 'auto'         = use the Axial Strain column if it actually changes; if it is
+%                  flat (extensometer not attached/recording), use
+%                  Axial Displacement / gaugeLength instead
+% 'strain'       = always use the Axial Strain column (extensometer, in/in)
+% 'displacement' = always use Axial Displacement / gaugeLength
+strainSource = 'auto';
+gaugeLength  = 2.0;            % [in] specimen gauge length, used for displacement-based strain
 zeroStart    = true;           % shift strain so the curve starts at 0
 
 % ---- 0.2% offset / elastic fit ----
@@ -61,7 +63,20 @@ iF = findCol(names, 'Axial Force');
 F  = data(:, iF);
 fUnit = units{iF};
 
-if strcmpi(strainSource, 'displacement')
+useDisp = strcmpi(strainSource, 'displacement');
+if strcmpi(strainSource, 'auto')
+    iE = findCol(names, 'Axial Strain');
+    eCol = data(isfinite(data(:, iE)), iE);
+    scale = 1 + 99*contains(units{iE}, '%');
+    % a real test goes well past 0.1% strain; less than that is sensor noise
+    useDisp = isempty(eCol) || max(eCol) - min(eCol) < 1e-3*scale;
+    if useDisp
+        fprintf(['Axial Strain column is flat (range %.3g) - extensometer was not recording.\n' ...
+            'Using Axial Displacement / gauge length (%g in) for strain.\n'], ...
+            max(eCol) - min(eCol), gaugeLength);
+    end
+end
+if useDisp
     iD = findCol(names, 'Axial Displacement');
     e  = data(:, iD) / gaugeLength;
     eUnit = 'in/in';
@@ -87,7 +102,7 @@ offsetVal = offset * strainScale;
 
 if max(e) - min(e) < 1e-4 * strainScale
     warning(['The strain barely changes (range %.3g %s). The extensometer may not have ' ...
-        'been recording; try strainSource = ''displacement''.'], max(e) - min(e), eUnit);
+        'been recording; set strainSource = ''auto'' or ''displacement''.'], max(e) - min(e), eUnit);
 end
 
 %% Stress
@@ -209,7 +224,7 @@ legend(ax, hLeg, legTxt, 'Location', 'southeast');
 
 % Results table
 if isempty(specimenArea), areaTxt = 'not given'; else, areaTxt = fmt(specimenArea); end
-if strcmpi(strainSource, 'displacement'), strainTxt = sprintf('Displacement / %g in', gaugeLength);
+if useDisp, strainTxt = sprintf('Displacement / %g in', gaugeLength);
 else, strainTxt = 'Axial Strain column'; end
 [~, fName, fExt] = fileparts(datFile);
 rows = {
