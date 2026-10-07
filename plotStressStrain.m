@@ -69,8 +69,9 @@ legendLocation = 'best';
 printFileInfo = true;
 colForce      = 'Axial Force';
 colStrain     = 'Axial Strain';
-colDisplacement = 'Axial Displacement';  % used instead when the Axial Strain column
-                                         % is empty (all zero): strain = displacement / gauge length
+colDisplacement = 'Axial Displacement';  % used when the Axial Strain column is empty (all
+                                         % zero), and after the extensometer is removed:
+                                         % strain = displacement / gauge length
 strainType    = 'strain';  % 'strain'    : column is strain
                            % 'extension' : column is extension/displacement; it
                            %               is divided by the gauge length
@@ -144,7 +145,19 @@ for i = 1:nSpec
     fprintf('%s: force = col %d "%s" (x%g), strain = col %d "%s" (x%g)\n', sp.label, ...
         iF, hF, cfgI.forceScale, iX, hX, cfgI.strainScale);
 
-    R{i} = analyzeSpecimen(data(:, iF), data(:, iX), sp, cfgI);
+    % Displacement (mm or in), to continue the strain after the extensometer is removed
+    D = [];
+    if strcmpi(cfgI.strainType, 'strain')
+        try
+            iD = pickColumn(cfg.colDisplacement, colNames, size(data, 2), 'colDisplacement');
+            if isempty(headers), hD = ''; else, hD = headers{iD}; end
+            D = data(:, iD) * autoLengthScale(hD, cfg.U);
+        catch
+            D = [];   % no displacement column: the curve stops where the extensometer came off
+        end
+    end
+
+    R{i} = analyzeSpecimen(data(:, iF), data(:, iX), sp, cfgI, D);
 end
 R = [R{:}];
 
@@ -438,10 +451,13 @@ function f = autoStrainScale(h)
     if any(h == '%'), f = 0.01; else, f = 1; end
 end
 
-function R = analyzeSpecimen(Fraw, Xraw, sp, cfg)
+function R = analyzeSpecimen(Fraw, Xraw, sp, cfg, D)
 % Stress, strain, uncertainties and material properties for one data set.
+% D (optional) is the displacement, used to continue the strain after the
+% extensometer was removed.
     U = cfg.U;
     ok = ~isnan(Fraw) & ~isnan(Xraw);
+    if ~isempty(D), ok = ok & ~isnan(D); D = D(ok); end
     F = Fraw(ok) * cfg.forceScale;
     X = Xraw(ok) * cfg.strainScale;
 
@@ -475,6 +491,30 @@ function R = analyzeSpecimen(Fraw, Xraw, sp, cfg)
     else
         eps  = X;
         uEps = uX;
+    end
+
+    % --- Extensometer removed during the test? ---
+    % After removal the strain reading freezes or jumps back while the force
+    % keeps changing. From that point the strain is continued with the
+    % displacement: eps = eps(k) + (D - D(k)) / L. Without a displacement
+    % column the data is cut off there.
+    iExt = numel(eps);                     % last reading from the extensometer
+    if ~isExt
+        k = extensometerEnd(eps, F);
+        if k < numel(eps)
+            iExt = k;
+            if ~isempty(D) && ~isnan(L)
+                ext = (D(k+1:end) - D(k))/L;
+                eps(k+1:end)  = eps(k) + ext;
+                uEps(k+1:end) = sqrt(uEps(k)^2 + (ext*uL/L).^2 + (cfg.uStrain(2)/100*ext).^2);
+                warning(['%s: extensometer removed at strain %.4g; strain after that is ' ...
+                    'continued from the displacement (dotted part of the curve).'], sp.label, eps(k));
+            else
+                F = F(1:k); sig = sig(1:k); uSig = uSig(1:k); eps = eps(1:k); uEps = uEps(1:k);
+                warning(['%s: extensometer removed at strain %.4g and no displacement column ' ...
+                    'found, so the curve stops there.'], sp.label, eps(k));
+            end
+        end
     end
 
     % --- Ultimate ---
@@ -533,7 +573,7 @@ function R = analyzeSpecimen(Fraw, Xraw, sp, cfg)
     uUt = sqrt(trapz(eps, uSig)^2 + (Ut/eps(end)*uEps(end))^2);
 
     % --- Pack results ---
-    R.label = sp.label; R.file = sp.filePath; R.shape = sp.shape;
+    R.label = sp.label; R.file = sp.filePath; R.shape = sp.shape; R.iExt = min(iExt, iR);
     R.width = sp.width; R.thickness = sp.thickness; R.diameter = sp.diameter;
     R.gaugeLength = sp.gaugeLength; R.A = A; R.uA = uA;
     [R.Fmax, iFm] = max(F); R.uFmax = uF(iFm);
@@ -544,6 +584,27 @@ function R = analyzeSpecimen(Fraw, Xraw, sp, cfg)
     R.epsR = eps(end); R.uEpsR = uEps(end); R.sigR = sig(end); R.uSigR = uSig(end);
     R.Ur = Ur*U.energyFactor; R.uUr = uUr*U.energyFactor;
     R.Ut = Ut*U.energyFactor; R.uUt = uUt*U.energyFactor;
+end
+
+function k = extensometerEnd(eps, F)
+% Index of the last good extensometer reading. The extensometer is taken as
+% removed where the strain suddenly jumps back, or stays frozen for 20+
+% readings while the force keeps changing. numel(eps) if neither happens.
+    n = numel(eps);
+    k = n;
+    runMax = cummax(eps);
+    jump = find(eps(2:end) < runMax(1:end-1) - max(5e-4, 0.05*runMax(1:end-1)), 1);
+    if ~isempty(jump), k = jump; end
+    w = 20;
+    dF = 0.02*max(abs(F));
+    i0 = max(2, find(abs(F) >= 0.3*max(abs(F)), 1));   % skip the start of the test
+    for i = i0:min(k, n - w)
+        seg = i:i+w;
+        if max(eps(seg)) - min(eps(seg)) < 1e-9 && max(F(seg)) - min(F(seg)) > dF
+            k = i;    % frozen from here on
+            break;
+        end
+    end
 end
 
 function [eY, sY] = offsetYield(eps, sig, E, b, off, i0)
@@ -569,8 +630,13 @@ function drawCurves(ax, R, show, nErrorBars, U, isZoom)
         vis = 'on'; if isZoom, vis = 'off'; end
 
         if show.curve
-            plot(ax, r.eps, r.sig, '-', 'Color', c, 'LineWidth', 1.5, ...
+            k = r.iExt;    % solid: extensometer strain; dotted: strain from displacement
+            plot(ax, r.eps(1:k), r.sig(1:k), '-', 'Color', c, 'LineWidth', 1.5, ...
                 'DisplayName', r.label, 'HandleVisibility', vis);
+            if k < numel(r.eps)
+                plot(ax, r.eps(k:end), r.sig(k:end), ':', 'Color', c, 'LineWidth', 1.5, ...
+                    'DisplayName', [r.label ' (strain from displacement)'], 'HandleVisibility', vis);
+            end
         end
         if show.errorBars && ~isZoom
             n = numel(r.eps);
@@ -595,7 +661,8 @@ function drawCurves(ax, R, show, nErrorBars, U, isZoom)
             plotPoint(ax, r.epsY, r.sigY, 'o', c, show.labels, 'Yield', U, isZoom, r.epsY > xRight);
         end
         % Brittle break: ultimate and rupture are the same point, so label it once
-        same = show.ultimate && show.rupture && abs(r.epsR - r.epsU) <= 0.01*r.epsR;
+        same = show.ultimate && show.rupture && abs(r.epsR - r.epsU) <= 0.01*r.epsR ...
+            && abs(r.sigR - r.sigU) <= 0.02*r.sigU;
         if show.rupture && ~isZoom
             plotPoint(ax, r.epsR, r.sigR, 's', c, show.labels && ~same, 'Rupture', U, isZoom, r.epsR > xRight);
         end
