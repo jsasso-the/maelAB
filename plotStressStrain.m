@@ -38,8 +38,9 @@ zeroStart    = true;           % shift strain so the curve starts at 0
 % ---- 0.2% offset / elastic fit ----
 offset    = 0.002;             % offset strain (0.002 = 0.2%)
 fitRange  = [0.10 0.40];       % fit elastic slope between these fractions of ultimate stress
-breakDrop = 0.10;              % after the ultimate, points below this fraction of
-                               % ultimate are post-break and are removed
+breakDrop = 0.10;              % break = first point after the ultimate where the load drops by
+                               % more than this fraction of ultimate in one step (or falls
+                               % below it); everything after the break is removed
 
 % ---- Error bars ----
 stressErrPct = 1.0;            % +/- percent of reading (load cell accuracy)
@@ -123,9 +124,11 @@ end
 
 %% Ultimate and rupture
 [sU, iU] = max(s);
-iBreak = find(s(iU:end) < breakDrop * sU, 1);
+% the load cell may not read 0 after the break, so look for the sudden drop
+sAfter = s(iU:end);
+iBreak = find(diff(sAfter) < -breakDrop*sU | sAfter(2:end) < breakDrop*sU, 1);
 if ~isempty(iBreak)                 % drop post-break points
-    n = iU + iBreak - 2;
+    n = iU + iBreak - 1;            % last point before the drop = rupture
     s = s(1:n);
     e = e(1:n);
 end
