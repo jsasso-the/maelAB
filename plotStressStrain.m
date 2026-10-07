@@ -51,8 +51,13 @@ show.table      = true;    % results table in the figure
 
 nErrorBars     = 15;           % number of error bars drawn along each curve
 plotTitle      = '';           % '' = automatic title
-strainLim      = [];           % x axis limits, e.g. [0 0.25]   ([] = auto)
-stressLim      = [];           % y axis limits, e.g. [0 400]    ([] = auto)
+% ---- Zoom / axis limits ----
+% strainLim sets the strain (x) range of the main plot, e.g. [0 0.01] to
+% zoom in on the first 1 % strain. The stress (y) range then fits the part
+% of the curve inside that strain range, unless you also set stressLim.
+strainLim      = [];           % e.g. [0 0.01]   ([] = whole test)
+stressLim      = [];           % e.g. [0 400]    ([] = auto)
+zoomStrainLim  = [];           % strain range of the small zoom plot ([] = auto)
 legendLocation = 'best';
 
 % ---- DAT file columns ----
@@ -176,6 +181,9 @@ title(ax, plotTitle, 'Interpreter', 'none');
 grid(ax, 'on'); box(ax, 'on');
 xMax = max([R.epsR]); yMax = max([R.sigU]);
 if ~isempty(strainLim), xlim(ax, strainLim); elseif xMax > 0, xlim(ax, [0 1.05*xMax]); end
+if ~isempty(strainLim) && isempty(stressLim)
+    yMax = visibleMax(R, strainLim);    % fit y to the curve inside the strain range
+end
 if ~isempty(stressLim), ylim(ax, stressLim); elseif yMax > 0, ylim(ax, [0 1.15*yMax]); end
 lg = legend(ax, 'Location', legendLocation, 'Interpreter', 'none');
 if isempty(get(lg, 'String')), delete(lg); end
@@ -186,8 +194,13 @@ if show.zoom
     drawCurves(az, R, show, nErrorBars, cfg.U, true);
     ey = [R.epsY]; sy = [R.sigY];
     if all(isnan(ey)), ey = min(3*offsetStrain, max([R.epsR])); sy = max([R.sigU]); end
-    xlim(az, [0 2*max(ey)]);
-    ylim(az, [0 1.3*max(sy)]);
+    if isempty(zoomStrainLim)
+        xlim(az, [0 2*max(ey)]);
+        ylim(az, [0 1.3*max(sy)]);
+    else
+        xlim(az, zoomStrainLim);
+        ylim(az, [0 1.15*visibleMax(R, zoomStrainLim)]);
+    end
     title(az, 'Zoom: elastic region and 0.2% offset');
     xlabel(az, 'Strain'); ylabel(az, sprintf('Stress (%s)', cfg.U.stress));
     grid(az, 'on'); box(az, 'on');
@@ -213,6 +226,16 @@ end
 
 
 %% ===================== LOCAL FUNCTIONS =====================
+
+function m = visibleMax(R, lim)
+% Highest stress of all curves inside the strain range lim.
+    m = 0;
+    for i = 1:numel(R)
+        in = R(i).eps >= lim(1) & R(i).eps <= lim(2);
+        if any(in), m = max(m, max(R(i).sig(in))); end
+    end
+    if m <= 0, m = max([R.sigU]); end
+end
 
 function U = unitSet(name)
 % Unit labels and conversion factors.
