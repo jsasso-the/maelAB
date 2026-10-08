@@ -10,6 +10,13 @@
 % DAT file (MTS 793 export): a few header lines, then a tab-delimited line of
 % channel names (Axial Force, Axial Displacement, Axial Strain), a line of
 % units (lbf, in, in/in), then the data.
+%
+% Works for brittle (carbon fiber), ductile (aluminum, steel) and plastic
+% samples:
+%  - strain comes from the extensometer while it was on the specimen, and
+%    from crosshead displacement after it was removed (or if it never was on)
+%  - the slack "toe" at the start is removed so the curve starts at 0
+%  - nothing after the rupture point is plotted
 clear; clc; close all;
 
 %% ===================== USER SETTINGS =====================
@@ -26,25 +33,25 @@ datFileName = '';              % '' = find the .dat file automatically, or e.g. 
 specimenArea = [];
 
 % ---- Strain ----
-% 'auto'         = use the Axial Strain column if it actually changes; if it is
-%                  flat (extensometer not attached/recording), use
-%                  Axial Displacement / gaugeLength instead
-% 'strain'       = always use the Axial Strain column (extensometer, in/in)
-% 'displacement' = always use Axial Displacement / gaugeLength
-strainSource = 'auto';
-gaugeLength  = 2.0;            % [in] specimen gauge length, used for displacement-based strain
-zeroStart    = true;           % shift strain so the curve starts at 0
+% 'auto'         = extensometer (Axial Strain) while it was recording, then
+%                  Axial Displacement / gaugeLength after it was removed;
+%                  displacement only if the extensometer was never on
+% 'strain'       = extensometer only
+% 'displacement' = Axial Displacement / gaugeLength only
+strainSource    = 'auto';
+gaugeLength     = 2.0;         % [in] specimen gauge length, used for displacement-based strain
+toeCompensation = true;        % remove the slack at the start so the elastic line starts at 0
 
 % ---- 0.2% offset / elastic fit ----
 offset    = 0.002;             % offset strain (0.002 = 0.2%)
-fitRange  = [0.10 0.40];       % fit elastic slope between these fractions of ultimate stress
-breakDrop = 0.10;              % break = first point after the ultimate where the load drops by
-                               % more than this fraction of ultimate in one step (or falls
-                               % below it); everything after the break is removed
+fitRange  = [];                % [] = automatic (steepest straight part of the curve), or
+                               % fractions of ultimate stress, e.g. [0.10 0.40]
+breakDrop = 0.10;              % a sudden load drop bigger than this fraction of ultimate
+                               % is the break; nothing after the rupture is plotted
 
 % ---- Error bars ----
 stressErrPct = 1.0;            % +/- percent of reading (load cell accuracy)
-strainErrAbs = 5e-5;           % +/- strain, same units as the strain axis
+strainErrAbs = 5e-5;           % +/- strain (in/in)
 nErrorBars   = 15;             % number of points along the curve that get error bars
 
 saveFigure = false;            % true = save .png and .fig into the material folder
@@ -61,50 +68,50 @@ fprintf('Material folder: %s\nDAT file:        %s\n', matPath, datFile);
 %% Read the data
 [data, names, units] = readMtsDat(datFile);
 iF = findCol(names, 'Axial Force');
-F  = data(:, iF);
+iD = findCol(names, 'Axial Displacement');
+iE = find(contains(names, 'Strain', 'IgnoreCase', true), 1);   % extensometer, may be missing
 fUnit = units{iF};
 
-useDisp = strcmpi(strainSource, 'displacement');
-if strcmpi(strainSource, 'auto')
-    iE = findCol(names, 'Axial Strain');
-    eCol = data(isfinite(data(:, iE)), iE);
-    scale = 1 + 99*contains(units{iE}, '%');
-    % a real test goes well past 0.1% strain; less than that is sensor noise
-    useDisp = isempty(eCol) || max(eCol) - min(eCol) < 1e-3*scale;
-    if useDisp
-        fprintf(['Axial Strain column is flat (range %.3g) - extensometer was not recording.\n' ...
-            'Using Axial Displacement / gauge length (%g in) for strain.\n'], ...
-            max(eCol) - min(eCol), gaugeLength);
+good = isfinite(data(:, iF)) & isfinite(data(:, iD));
+if ~isempty(iE), good = good & isfinite(data(:, iE)); end
+data = data(good, :);
+if size(data, 1) < 10, error('Not enough data points in %s.', datFile); end
+
+F  = data(:, iF);
+eD = data(:, iD) / gaugeLength;
+eD = eD - eD(1);
+
+%% Strain
+e = eD;
+strainTxt = sprintf('Displacement / %g in', gaugeLength);
+if ~strcmpi(strainSource, 'displacement') && ~isempty(iE)
+    eX = data(:, iE);
+    if contains(units{iE}, '%'), eX = eX/100; end    % percent -> in/in
+    eX = eX - eX(1);
+    [~, iRem] = max(eX);                             % last reading before the extensometer came off
+    if strcmpi(strainSource, 'strain')
+        e = eX;
+        strainTxt = 'Extensometer';
+    elseif eX(iRem) - min(eX(1:iRem)) >= 1e-3        % a real test goes well past 0.1% strain
+        % after removal, continue with displacement, scaled to match the
+        % extensometer over the second half of the time it was on
+        iA = max(1, round(iRem/2));
+        k  = (eX(iRem) - eX(iA)) / (eD(iRem) - eD(iA));
+        if ~isfinite(k) || k <= 0, k = 1; end
+        e = eX;
+        e(iRem+1:end) = eX(iRem) + k*(eD(iRem+1:end) - eD(iRem));
+        if iRem < numel(e) - 5
+            strainTxt = sprintf('Extensometer to %.3g, then displacement', eX(iRem));
+            fprintf('Extensometer removed at strain %.4g; continuing with displacement.\n', eX(iRem));
+        else
+            strainTxt = 'Extensometer';
+        end
+    else
+        fprintf(['Axial Strain column is flat - extensometer was not recording.\n' ...
+            'Using Axial Displacement / gauge length (%g in) for strain.\n'], gaugeLength);
     end
 end
-if useDisp
-    iD = findCol(names, 'Axial Displacement');
-    e  = data(:, iD) / gaugeLength;
-    eUnit = 'in/in';
-else
-    iE = findCol(names, 'Axial Strain');
-    e  = data(:, iE);
-    eUnit = units{iE};
-end
-
-good = isfinite(F) & isfinite(e);
-F = F(good);
-e = e(good);
-if numel(F) < 5, error('Not enough data points in %s.', datFile); end
-if zeroStart, e = e - e(1); end
-
-% Strain recorded in percent instead of in/in
-if contains(eUnit, '%')
-    strainScale = 100;
-else
-    strainScale = 1;
-end
-offsetVal = offset * strainScale;
-
-if max(e) - min(e) < 1e-4 * strainScale
-    warning(['The strain barely changes (range %.3g %s). The extensometer may not have ' ...
-        'been recording; set strainSource = ''auto'' or ''displacement''.'], max(e) - min(e), eUnit);
-end
+eUnit = 'in/in';
 
 %% Stress
 if isempty(specimenArea)
@@ -122,38 +129,73 @@ else
     sLabel = sprintf('Stress (%s)', sUnit);
 end
 
-%% Ultimate and rupture
+%% Break: biggest sudden load drop after the ultimate
+% It can be one sample or spread over a few, and the load cell may not read
+% 0 afterwards (it can even go negative).
 [sU, iU] = max(s);
-% the load cell may not read 0 after the break, so look for the sudden drop
-sAfter = s(iU:end);
-iBreak = find(diff(sAfter) < -breakDrop*sU | sAfter(2:end) < breakDrop*sU, 1);
-if ~isempty(iBreak)                 % drop post-break points
-    n = iU + iBreak - 1;            % last point before the drop = rupture
-    s = s(1:n);
-    e = e(1:n);
+iR = numel(s);
+d  = diff(s(iU:end));               % d(j) = s(iU+j) - s(iU+j-1)
+if ~isempty(d)
+    [dMax, j] = min(d);
+    if dMax < 0
+        a = j;
+        z = j;
+        while a > 1 && d(a-1) < 0.3*dMax, a = a - 1; end
+        while z < numel(d) && d(z+1) < 0.3*dMax, z = z + 1; end
+        if -sum(d(a:z)) > breakDrop*sU
+            iR = iU + a - 1;        % last point before the drop
+        end
+    end
 end
+if iR == numel(s)
+    fprintf('No break found in the data; rupture is the last data point.\n');
+end
+
+%% Elastic modulus (linear fit)
+[E, b, idxFit] = fitElastic(e(1:iR), s(1:iR), fitRange);
+
+%% Rupture = start of the final load drop
+% Ductile samples can tear for a while before the last snap; walk back from
+% the snap while the curve is still falling steeply (> 5% of E).
+if E > 0
+    w = max(2, round(0.01*numel(s)));
+    j = iR;
+    while j - w >= iU && e(j) > e(j-w) && (s(j-w) - s(j))/(e(j) - e(j-w)) > 0.05*E
+        j = j - 1;
+    end
+    if j < iR
+        lo = max(iU, j - w);
+        [~, k] = max(s(lo:j));
+        iR = lo + k - 1;
+    end
+end
+s = s(1:iR);
+e = e(1:iR);
+
+%% Toe compensation: shift so the elastic line passes through 0
+kStart = idxFit(1);
+if toeCompensation && E > 0
+    e0 = -b/E;
+    e  = [0; e(idxFit(1):end) - e0];
+    s  = [0; s(idxFit(1):end)];
+    b  = 0;
+    kStart = 2;
+end
+
+%% Ultimate, rupture and 0.2% offset yield
+[sU, iU] = max(s);
 eU = e(iU);
 iR = numel(s);
 sR = s(iR);
 eR = e(iR);
 
-%% Elastic modulus (linear fit) and 0.2% offset yield
-idxFit = find(s(1:iU) >= fitRange(1)*sU & s(1:iU) <= fitRange(2)*sU);
-if numel(idxFit) < 2
-    error('Fewer than 2 points in the elastic fit range. Widen fitRange.');
-end
-p = polyfit(e(idxFit), s(idxFit), 1);
-E = p(1);
-b = p(2);
-
 sY = NaN;
 eY = NaN;
 if isfinite(E) && E > 0
-    % offset line: s = E*(e - offsetVal) + b; yield is where the curve
-    % first drops below it
-    g  = s - (E*(e - offsetVal) + b);
-    k0 = idxFit(1);
-    k  = find(g(k0:end) <= 0, 1) + k0 - 1;
+    % offset line: s = E*(e - offset) + b; yield is where the curve first
+    % drops below it
+    g = s - (E*(e - offset) + b);
+    k = find(g(kStart:end) <= 0, 1) + kStart - 1;
     if ~isempty(k) && k > 1
         t  = g(k-1) / (g(k-1) - g(k));
         eY = e(k-1) + t*(e(k) - e(k-1));
@@ -163,7 +205,7 @@ else
     warning('Elastic slope is not positive (E = %.3g); 0.2%% offset yield cannot be found.', E);
 end
 if isnan(sY)
-    warning('The curve never crosses the 0.2% offset line; no yield point.');
+    fprintf('The curve never crosses the 0.2%% offset line (brittle sample); no yield point.\n');
 end
 
 %% Figure: plot on the left, table on the right
@@ -186,7 +228,7 @@ hOff = gobjects(0);
 if isfinite(E) && E > 0
     if isfinite(sY), sTop = 1.15*sY; else, sTop = sU; end
     sLine = [0 sTop];
-    eLine = (sLine - b)/E + offsetVal;
+    eLine = (sLine - b)/E + offset;
     hOff  = plot(ax, eLine, sLine, '--', 'LineWidth', 1.2, 'Color', [0.85 0.33 0.1]);
 end
 
@@ -200,12 +242,17 @@ if isfinite(sY)
 end
 hU = plot(ax, eU, sU, '^', 'MarkerSize', 9, 'LineWidth', 1.5, ...
     'MarkerFaceColor', [0.93 0.69 0.13], 'MarkerEdgeColor', 'k');
-text(ax, eU, sU, sprintf('Ultimate (%.4g, %.4g)', eU, sU), ...
-    'VerticalAlignment', 'bottom', 'HorizontalAlignment', 'center');
 hR = plot(ax, eR, sR, 's', 'MarkerSize', 9, 'LineWidth', 1.5, ...
     'MarkerFaceColor', [0.64 0.08 0.18], 'MarkerEdgeColor', 'k');
-text(ax, eR, sR, sprintf('Rupture (%.4g, %.4g)  ', eR, sR), ...
-    'VerticalAlignment', 'top', 'HorizontalAlignment', 'right');
+if iU == iR                         % brittle: breaks at the ultimate
+    text(ax, eU, sU, sprintf('Ultimate = Rupture (%.4g, %.4g)  ', eU, sU), ...
+        'VerticalAlignment', 'bottom', 'HorizontalAlignment', 'right');
+else
+    text(ax, eU, sU, sprintf('Ultimate (%.4g, %.4g)', eU, sU), ...
+        'VerticalAlignment', 'bottom', 'HorizontalAlignment', 'center');
+    text(ax, eR, sR, sprintf('Rupture (%.4g, %.4g)  ', eR, sR), ...
+        'VerticalAlignment', 'top', 'HorizontalAlignment', 'right');
+end
 hold(ax, 'off');
 
 grid(ax, 'on');
@@ -223,12 +270,10 @@ legTxt = {'Stress-strain curve', sprintf('Error (\\pm%g%% stress, \\pm%g strain)
 if ~isempty(hOff), legTxt{end+1} = sprintf('%g%% offset line', offset*100); end
 if ~isempty(hY),   legTxt{end+1} = 'Yield (0.2% offset)'; end
 legTxt = [legTxt {'Ultimate', 'Rupture'}];
-legend(ax, hLeg, legTxt, 'Location', 'southeast');
+legend(ax, hLeg, legTxt, 'Location', 'best');
 
 % Results table
 if isempty(specimenArea), areaTxt = 'not given'; else, areaTxt = fmt(specimenArea); end
-if useDisp, strainTxt = sprintf('Displacement / %g in', gaugeLength);
-else, strainTxt = 'Axial Strain column'; end
 [~, fName, fExt] = fileparts(datFile);
 rows = {
     'Material',                matName,          ''
@@ -236,7 +281,7 @@ rows = {
     'Data points',             fmt(iR),          ''
     'Cross-section area',      areaTxt,          'in^2'
     'Strain source',           strainTxt,        ''
-    'Elastic modulus E',       fmt(E),           [sUnit '/(' eUnit ')']
+    'Elastic modulus E',       fmt(E),           sUnit
     '0.2% yield stress',       fmt(sY),          sUnit
     'Strain at yield',         fmt(eY),          eUnit
     'Ultimate stress',         fmt(sU),          sUnit
@@ -248,7 +293,7 @@ rows = {
     };
 uitable(fig, 'Data', rows, 'ColumnName', {'Property', 'Value', 'Units'}, ...
     'RowName', [], 'Units', 'normalized', 'Position', [0.65 0.11 0.33 0.80], ...
-    'ColumnWidth', {150, 140, 110}, 'FontSize', 11);
+    'ColumnWidth', {150, 160, 90}, 'FontSize', 11);
 
 disp(cell2table(rows, 'VariableNames', {'Property', 'Value', 'Units'}));
 
@@ -257,6 +302,37 @@ if saveFigure
     saveas(fig, [outBase '.png']);
     savefig(fig, [outBase '.fig']);
     fprintf('Saved %s.png and .fig\n', outBase);
+end
+
+%% Local function: elastic slope from a straight-line fit
+% fitRange = [] tries 25%-wide stress windows starting at 5%..50% of the
+% ultimate and keeps the steepest one (skips the slack toe at the start and
+% the curved part after yield).
+function [E, b, idx] = fitElastic(e, s, fitRange)
+    [sU, iU] = max(s);
+    if isempty(fitRange)
+        starts = 0.05:0.05:0.50;
+        width  = 0.25;
+    else
+        starts = fitRange(1);
+        width  = fitRange(2) - fitRange(1);
+    end
+    E = NaN;
+    b = NaN;
+    idx = [];
+    for a = starts
+        m = find(s(1:iU) >= a*sU & s(1:iU) <= (a + width)*sU);
+        if numel(m) < 3, continue; end
+        p = polyfit(e(m), s(m), 1);
+        if isempty(idx) || p(1) > E
+            E = p(1);
+            b = p(2);
+            idx = m;
+        end
+    end
+    if isempty(idx)
+        error('Not enough points to fit the elastic slope. Set fitRange, e.g. [0.10 0.40].');
+    end
 end
 
 %% Local function: use baseFolder, or find "MAE Solids datasets" near here
