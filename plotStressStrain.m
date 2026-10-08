@@ -81,6 +81,8 @@ breakDrop = 0.10;              % a sudden load drop bigger than this fraction of
                                % is the break; nothing after the rupture is plotted
 
 nErrorBars = 15;               % number of points along the curve that get uncertainty bars
+compareStrain = true;          % files with extensometer data (steel) also get a figure comparing
+                               % the extensometer and MTS displacement readings
 saveFigure = false;            % true = save .png and .fig into the material folder
 %% =========================================================
 
@@ -123,11 +125,13 @@ eD = eD - eD(1);
 
 %% Strain
 e = eD;
+eExt = [];                          % extensometer strain, in/in (empty if none)
 isExt = false(size(e));             % which points come from the extensometer
 if ~strcmpi(strainSource, 'displacement') && ~isempty(iE)
     eX = data(:, iE);
     if contains(units{iE}, '%'), eX = eX/100; end    % percent -> in/in
     eX = eX - eX(1);
+    eExt = eX;
     [~, iRem] = max(eX);                             % last reading before the extensometer came off
     if strcmpi(strainSource, 'strain')
         e = eX;
@@ -171,6 +175,8 @@ else
 end
 relS = sqrt((loadUncPct/100)^2 + relA^2);   % relative stress uncertainty
 sUnc = abs(s) * relS;
+sRaw = s;
+sUncRaw = sUnc;
 
 %% Break: biggest sudden load drop after the ultimate
 % It can be one sample or spread over a few, and the load cell may not read
@@ -194,27 +200,14 @@ if iR == numel(s)
     fprintf('No break found in the data; rupture is the last data point.\n');
 end
 
-%% Young's modulus (linear fit) and its uncertainty
-[E, b, idxFit] = fitElastic(e(1:iR), s(1:iR), fitRange);
-ef = e(idxFit);
-sf = s(idxFit);
-res = sf - (E*ef + b);
-seE = sqrt(sum(res.^2)/max(1, numel(ef) - 2)) / sqrt(sum((ef - mean(ef)).^2));   % std. error of slope
-spanFit = max(ef) - min(ef);
-if isExt(idxFit(1))
-    relEfit = sqrt(2)*extUnc/spanFit;
-else
-    relEfit = sqrt((sqrt(2)*dispUnc/L0/spanFit)^2 + (gaugeUnc/L0)^2);
-end
-EUnc = abs(E) * sqrt((seE/E)^2 + relS^2 + relEfit^2);
-
 %% Rupture = start of the final load drop
 % Ductile samples can tear for a while before the last snap; walk back from
 % the snap while the curve is still falling steeply (> 5% of E).
-if E > 0
+E0 = fitElastic(e(1:iR), s(1:iR), fitRange);
+if E0 > 0
     w = max(2, round(0.01*numel(s)));
     j = iR;
-    while j - w >= iU && e(j) > e(j-w) && (s(j-w) - s(j))/(e(j) - e(j-w)) > 0.05*E
+    while j - w >= iU && e(j) > e(j-w) && (s(j-w) - s(j))/(e(j) - e(j-w)) > 0.05*E0
         j = j - 1;
     end
     if j < iR
@@ -223,54 +216,33 @@ if E > 0
         iR = lo + k - 1;
     end
 end
-s    = s(1:iR);
-e    = e(1:iR);
-sUnc = sUnc(1:iR);
-eUnc = eUnc(1:iR);
+iR0 = iR;                           % rupture index in the raw data
 
-%% Toe compensation: shift so the elastic line passes through 0
-kStart = idxFit(1);
-if toeCompensation && E > 0
-    e0   = -b/E;
-    e    = [0; e(idxFit(1):end) - e0];
-    s    = [0; s(idxFit(1):end)];
-    sUnc = [0; sUnc(idxFit(1):end)];
-    eUnc = [0; eUnc(idxFit(1):end)];
-    b    = 0;
-    kStart = 2;
+%% Young's modulus, toe compensation and 0.2% offset yield
+P = struct('fitRange', fitRange, 'offset', offset, 'toe', toeCompensation, 'relS', relS, ...
+    'extUnc', extUnc, 'dispUnc', dispUnc, 'gaugeUnc', gaugeUnc, 'L0', L0);
+r = analyzeCurve(e(1:iR), s(1:iR), eUnc(1:iR), sUnc(1:iR), isExt(1:iR), P);
+e    = r.e;     s    = r.s;
+eUnc = r.eUnc;  sUnc = r.sUnc;
+E  = r.E;   EUnc = r.EUnc;  b = r.b;
+sY = r.sY;  eY = r.eY;  sYu = r.sYu;  eYu = r.eYu;
+if ~(E > 0)
+    warning('Elastic slope is not positive (E = %.3g); 0.2%% offset yield cannot be found.', E);
+elseif isnan(sY)
+    fprintf('The curve never crosses the 0.2%% offset line (brittle sample); no yield point.\n');
 end
 
-%% Ultimate, rupture and 0.2% offset yield
+%% Ultimate and rupture
 [sU, iU] = max(s);
 eU  = e(iU);    sUu = sUnc(iU);    eUu = eUnc(iU);
 iR  = numel(s);
 sR  = s(iR);    sRu = sUnc(iR);    eR  = e(iR);    eRu = eUnc(iR);
 
-sY = NaN;  eY = NaN;  sYu = NaN;  eYu = NaN;
-if isfinite(E) && E > 0
-    % offset line: s = E*(e - offset) + b; yield is where the curve first
-    % drops below it
-    g = s - (E*(e - offset) + b);
-    k = find(g(kStart:end) <= 0, 1) + kStart - 1;
-    if ~isempty(k) && k > 1
-        t   = g(k-1) / (g(k-1) - g(k));
-        eY  = e(k-1) + t*(e(k) - e(k-1));
-        sY  = s(k-1) + t*(s(k) - s(k-1));
-        sYu = abs(sY) * relS;
-        eYu = eUnc(k);
-    end
-else
-    warning('Elastic slope is not positive (E = %.3g); 0.2%% offset yield cannot be found.', E);
-end
-if isnan(sY)
-    fprintf('The curve never crosses the 0.2%% offset line (brittle sample); no yield point.\n');
-end
-
 %% Modulus of toughness (area under the curve) and resilience (sY^2 / 2E)
 UT  = trapz(e, s);
 UTu = abs(UT) * sqrt(relS^2 + (eRu/eR)^2);
-Ur  = sY^2 / (2*E);
-Uru = abs(Ur) * sqrt((2*sYu/sY)^2 + (EUnc/E)^2);
+Ur  = r.Ur;
+Uru = r.Uru;
 
 %% Figure: plot on the left, table on the right
 fig = figure('Name', sprintf('%s stress-strain', matName), 'NumberTitle', 'off', ...
@@ -281,17 +253,13 @@ hold(ax, 'on');
 hCurve = plot(ax, e, s, '-', 'LineWidth', 1.5, 'Color', [0 0.3 0.6]);
 
 % Uncertainty bars on evenly spaced points along the curve
-ib   = unique(round(linspace(1, iR, min(nErrorBars, iR))));
-hErr = errorbar(ax, e(ib), s(ib), sUnc(ib), sUnc(ib), eUnc(ib), eUnc(ib), 'LineStyle', 'none', ...
-    'Color', [0.5 0.5 0.5], 'CapSize', 4);
+hErr = drawUncertainty(ax, e, s, eUnc, sUnc, nErrorBars, [0.5 0.5 0.5]);
 
 % 0.2% offset line, from zero stress up to a bit past yield
 hOff = gobjects(0);
 if isfinite(E) && E > 0
-    if isfinite(sY), sTop = 1.15*sY; else, sTop = sU; end
-    sLine = [0 sTop];
-    eLine = (sLine - b)/E + offset;
-    hOff  = plot(ax, eLine, sLine, '--', 'LineWidth', 1.2, 'Color', [0.85 0.33 0.1]);
+    [eLine, sLine] = offsetLine(r, offset, sU);
+    hOff = plot(ax, eLine, sLine, '--', 'LineWidth', 1.2, 'Color', [0.85 0.33 0.1]);
 end
 
 % Key points
@@ -299,7 +267,7 @@ hY = gobjects(0);
 if isfinite(sY)
     hY = plot(ax, eY, sY, 'o', 'MarkerSize', 9, 'LineWidth', 1.5, ...
         'MarkerFaceColor', [0.47 0.67 0.19], 'MarkerEdgeColor', 'k');
-    text(ax, eY, sY, sprintf('  Yield (%.4g, %.4g)', eY, sY), ...
+    text(ax, eY, sY, sprintf('  Yield (%.4g, %.5g)', eY, sY), ...
         'VerticalAlignment', 'top', 'HorizontalAlignment', 'left');
 end
 hU = plot(ax, eU, sU, '^', 'MarkerSize', 9, 'LineWidth', 1.5, ...
@@ -307,12 +275,12 @@ hU = plot(ax, eU, sU, '^', 'MarkerSize', 9, 'LineWidth', 1.5, ...
 hR = plot(ax, eR, sR, 's', 'MarkerSize', 9, 'LineWidth', 1.5, ...
     'MarkerFaceColor', [0.64 0.08 0.18], 'MarkerEdgeColor', 'k');
 if iU == iR                         % brittle: breaks at the ultimate
-    text(ax, eU, sU, sprintf('Ultimate = Rupture (%.4g, %.4g)  ', eU, sU), ...
+    text(ax, eU, sU, sprintf('Ultimate = Rupture (%.4g, %.5g)  ', eU, sU), ...
         'VerticalAlignment', 'bottom', 'HorizontalAlignment', 'right');
 else
-    text(ax, eU, sU, sprintf('Ultimate (%.4g, %.4g)', eU, sU), ...
+    text(ax, eU, sU, sprintf('Ultimate (%.4g, %.5g)', eU, sU), ...
         'VerticalAlignment', 'bottom', 'HorizontalAlignment', 'center');
-    text(ax, eR, sR, sprintf('Rupture (%.4g, %.4g)  ', eR, sR), ...
+    text(ax, eR, sR, sprintf('Rupture (%.4g, %.5g)  ', eR, sR), ...
         'VerticalAlignment', 'top', 'HorizontalAlignment', 'right');
 end
 hold(ax, 'off');
@@ -367,11 +335,146 @@ uitable(fig, 'Data', rows, 'ColumnName', {'Quantity', 'Value', 'Units'}, ...
 
 disp(cell2table(rows, 'VariableNames', {'Quantity', 'Value', 'Units'}));
 
+%% Extensometer vs. MTS displacement (files with extensometer data, e.g. steel)
+% Both readings analyzed separately on one plot. The extensometer curve
+% stops where the extensometer was removed.
+fig2 = [];
+if compareStrain && ~isempty(eExt) && any(isExt)
+    nX = min(find(isExt, 1, 'last'), iR0);
+    rX = analyzeCurve(eExt(1:nX), sRaw(1:nX), extUnc*ones(nX, 1), sUncRaw(1:nX), true(nX, 1), P);
+    eDu = sqrt((dispUnc/L0)^2 + (eD*gaugeUnc/L0).^2);
+    rD = analyzeCurve(eD(1:iR0), sRaw(1:iR0), eDu(1:iR0), sUncRaw(1:iR0), false(iR0, 1), P);
+
+    fig2 = figure('Name', sprintf('%s extensometer vs MTS', matName), 'NumberTitle', 'off', ...
+        'Color', 'w', 'Position', [90 90 1500 700]);
+    ax2 = axes(fig2, 'Position', [0.05 0.10 0.50 0.82]);
+    hold(ax2, 'on');
+    cX = [0 0.3 0.6];               % extensometer
+    cD = [0.85 0.33 0.1];           % MTS displacement
+    readings = {rX, cX, 'Extensometer', 'ext.'; rD, cD, 'MTS displacement', 'MTS'};
+    h2 = gobjects(0);
+    leg2 = {};
+    for q = 1:2
+        [rq, cq, nameq, shortq] = readings{q, :};
+        h2(end+1) = plot(ax2, rq.e, rq.s, '-', 'LineWidth', 1.5, 'Color', cq);
+        leg2{end+1} = nameq;
+        h2(end+1) = drawUncertainty(ax2, rq.e, rq.s, rq.eUnc, rq.sUnc, nErrorBars, 0.5*cq + 0.5);
+        leg2{end+1} = sprintf('Uncertainty (%s)', shortq);
+        if rq.E > 0
+            [eLine, sLine] = offsetLine(rq, offset, max(rq.s));
+            h2(end+1) = plot(ax2, eLine, sLine, '--', 'LineWidth', 1.2, 'Color', cq);
+            leg2{end+1} = sprintf('%g%% offset line (%s)', offset*100, shortq);
+        end
+        if isfinite(rq.sY)
+            h2(end+1) = plot(ax2, rq.eY, rq.sY, 'o', 'MarkerSize', 9, 'LineWidth', 1.5, ...
+                'MarkerFaceColor', cq, 'MarkerEdgeColor', 'k');
+            leg2{end+1} = sprintf('Yield (%s)', shortq);
+            % labels stacked below the yield points so the two don't overlap
+            yLab = rq.sY - (0.04 + 0.08*(q - 1))*max([rX.s; rD.s]);
+            text(ax2, rq.eY, yLab, sprintf('   Yield, %s (%.4g, %.5g)', shortq, rq.eY, rq.sY), ...
+                'VerticalAlignment', 'top', 'HorizontalAlignment', 'left', 'Color', cq);
+        end
+    end
+    hold(ax2, 'off');
+    grid(ax2, 'on');
+    box(ax2, 'on');
+    xlabel(ax2, sprintf('Axial Strain (%s)', eUnit));
+    ylabel(ax2, sLabel);
+    title(ax2, sprintf('%s - Extensometer vs. MTS Displacement', matName), 'Interpreter', 'none');
+    xlim(ax2, [0, 1.05*max([rX.e; rD.e])]);
+    ylim(ax2, [0, 1.12*max([rX.s; rD.s])]);
+    legend(ax2, h2, leg2, 'Location', 'southeast');
+
+    % percent difference, extensometer taken as the accurate value
+    pd = @(mts, ext) sprintf('%.1f%%', abs(mts - ext)/abs(ext)*100);
+    rows2 = {
+        ['Young''s modulus E (' sUnit ')'],         pm(rX.E,  rX.EUnc), pm(rD.E,  rD.EUnc), pd(rD.E,  rX.E)
+        ['Yield stress, 0.2% (' sUnit ')'],         pm(rX.sY, rX.sYu),  pm(rD.sY, rD.sYu),  pd(rD.sY, rX.sY)
+        ['Yield strain (' eUnit ')'],               pm(rX.eY, rX.eYu),  pm(rD.eY, rD.eYu),  pd(rD.eY, rX.eY)
+        ['Modulus of resilience (' uUnit ')'],      pm(rX.Ur, rX.Uru),  pm(rD.Ur, rD.Uru),  ''
+        };
+    uitable(fig2, 'Data', rows2, ...
+        'ColumnName', {'Quantity', 'Extensometer', 'MTS displacement', '% difference'}, ...
+        'RowName', [], 'Units', 'normalized', 'Position', [0.57 0.40 0.42 0.30], ...
+        'ColumnWidth', {215, 165, 165, 95}, 'FontSize', 11);
+    disp(cell2table(rows2, 'VariableNames', {'Quantity', 'Extensometer', 'MTS', 'PercentDiff'}));
+end
+
 if saveFigure
     outBase = fullfile(matPath, [matName '_stress_strain']);
     saveas(fig, [outBase '.png']);
     savefig(fig, [outBase '.fig']);
     fprintf('Saved %s.png and .fig\n', outBase);
+    if ~isempty(fig2)
+        saveas(fig2, [outBase '_ext_vs_MTS.png']);
+        savefig(fig2, [outBase '_ext_vs_MTS.fig']);
+        fprintf('Saved %s_ext_vs_MTS.png and .fig\n', outBase);
+    end
+end
+
+%% Local function: elastic fit, toe compensation and 0.2% offset yield
+% Returns a struct with the (toe-compensated) curve and its uncertainties,
+% E +/- dE, the yield point +/- uncertainties and the modulus of resilience.
+function r = analyzeCurve(e, s, eUnc, sUnc, isExt, P)
+    [E, b, idx] = fitElastic(e, s, P.fitRange);
+    ef  = e(idx);
+    sf  = s(idx);
+    res = sf - (E*ef + b);
+    seE = sqrt(sum(res.^2)/max(1, numel(ef) - 2)) / sqrt(sum((ef - mean(ef)).^2));   % std. error of slope
+    span = max(ef) - min(ef);
+    if isExt(idx(1))
+        relEfit = sqrt(2)*P.extUnc/span;
+    else
+        relEfit = sqrt((sqrt(2)*P.dispUnc/P.L0/span)^2 + (P.gaugeUnc/P.L0)^2);
+    end
+    r.E    = E;
+    r.EUnc = abs(E) * sqrt((seE/E)^2 + P.relS^2 + relEfit^2);
+
+    % toe compensation: shift so the elastic line passes through 0
+    kStart = idx(1);
+    if P.toe && E > 0
+        e0   = -b/E;
+        e    = [0; e(idx(1):end) - e0];
+        s    = [0; s(idx(1):end)];
+        sUnc = [0; sUnc(idx(1):end)];
+        eUnc = [0; eUnc(idx(1):end)];
+        b    = 0;
+        kStart = 2;
+    end
+    r.e = e;  r.s = s;  r.eUnc = eUnc;  r.sUnc = sUnc;  r.b = b;
+
+    % offset line: s = E*(e - offset) + b; yield is where the curve first
+    % drops below it
+    r.sY = NaN;  r.eY = NaN;  r.sYu = NaN;  r.eYu = NaN;
+    if isfinite(E) && E > 0
+        g = s - (E*(e - P.offset) + b);
+        k = find(g(kStart:end) <= 0, 1) + kStart - 1;
+        if ~isempty(k) && k > 1
+            t     = g(k-1) / (g(k-1) - g(k));
+            r.eY  = e(k-1) + t*(e(k) - e(k-1));
+            r.sY  = s(k-1) + t*(s(k) - s(k-1));
+            r.sYu = abs(r.sY) * P.relS;
+            r.eYu = eUnc(k);
+        end
+    end
+
+    % modulus of resilience: sY^2 / 2E
+    r.Ur  = r.sY^2 / (2*E);
+    r.Uru = abs(r.Ur) * sqrt((2*r.sYu/r.sY)^2 + (r.EUnc/E)^2);
+end
+
+%% Local function: 0.2% offset line from zero stress to a bit past yield
+function [eLine, sLine] = offsetLine(r, offset, sMax)
+    if isfinite(r.sY), sTop = 1.15*r.sY; else, sTop = sMax; end
+    sLine = [0 sTop];
+    eLine = (sLine - r.b)/r.E + offset;
+end
+
+%% Local function: uncertainty bars on evenly spaced points along a curve
+function h = drawUncertainty(ax, e, s, eUnc, sUnc, n, color)
+    ib = unique(round(linspace(1, numel(e), min(n, numel(e)))));
+    h  = errorbar(ax, e(ib), s(ib), sUnc(ib), sUnc(ib), eUnc(ib), eUnc(ib), 'LineStyle', 'none', ...
+        'Color', color, 'CapSize', 4);
 end
 
 %% Local function: specimen row whose key appears in the folder name
