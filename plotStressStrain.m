@@ -20,10 +20,6 @@
 %  - the slack "toe" at the start is removed so the curve starts at 0
 %  - nothing after the rupture point is plotted
 %
-% Ductility (from the before/after measurements):
-%   elongation      %EL = (Lf - Li)/Li * 100
-%   reduction area  %RA = (Ai - Af)/Ai * 100
-%
 % Uncertainties (propagated as independent errors, root-sum-square):
 %   area       A = w*t            dA/A  = sqrt((dw/w)^2 + (dt/t)^2)
 %              A = pi*d^2/4       dA/A  = 2*dd/d
@@ -49,8 +45,8 @@ datFileName = '';              % '' = find the .dat file automatically, or e.g. 
 % shape: 'rect' (width x thickness) or 'round' (diameter in the W columns,
 %        NaN in the t columns)
 % i = initial (before the test), f = final (after fracture)
-% NaN = not measured -> width/thickness: the stress axis falls back to
-%       axial force (lbf); final values: %EL / %RA show N/A
+% NaN = not measured -> initial width/thickness: the stress axis falls
+%       back to axial force (lbf); final values: N/A in the table
 specimens = {
 %   keys                          shape   Li      Wi      ti      Lf      Wf      tf
     'steel',                      'rect', 2.7535, 0.5100, 0.0650, 3.0065, 0.4355, 0.0575
@@ -98,14 +94,7 @@ fprintf('Material folder: %s\nDAT file:        %s\n', matPath, datFile);
 
 %% Specimen geometry
 [shape, L0, Wi, ti, Lf, Wf, tf] = lookupSpecimen(specimens, matName);
-[A,  relA ] = sectionArea(shape, Wi, ti, dimUnc);
-[Af, relAf] = sectionArea(shape, Wf, tf, dimUnc);
-
-% Ductility from the before/after measurements
-EL   = (Lf - L0)/L0 * 100;
-ELu  = 100 * sqrt((gaugeUnc/L0)^2 + (Lf*gaugeUnc/L0^2)^2);
-RA   = (A - Af)/A * 100;
-RAu  = 100 * (Af/A) * sqrt(relA^2 + relAf^2);
+[A, relA] = sectionArea(shape, Wi, ti, dimUnc);
 
 haveArea = isfinite(A) && A > 0;
 if ~haveArea
@@ -135,7 +124,6 @@ eD = eD - eD(1);
 %% Strain
 e = eD;
 isExt = false(size(e));             % which points come from the extensometer
-strainTxt = sprintf('Displacement / %g in', L0);
 if ~strcmpi(strainSource, 'displacement') && ~isempty(iE)
     eX = data(:, iE);
     if contains(units{iE}, '%'), eX = eX/100; end    % percent -> in/in
@@ -144,7 +132,6 @@ if ~strcmpi(strainSource, 'displacement') && ~isempty(iE)
     if strcmpi(strainSource, 'strain')
         e = eX;
         isExt(:) = true;
-        strainTxt = 'Extensometer';
     elseif eX(iRem) - min(eX(1:iRem)) >= 1e-3        % a real test goes well past 0.1% strain
         % after removal, continue with displacement, scaled to match the
         % extensometer over the second half of the time it was on
@@ -155,10 +142,7 @@ if ~strcmpi(strainSource, 'displacement') && ~isempty(iE)
         e(iRem+1:end) = eX(iRem) + k*(eD(iRem+1:end) - eD(iRem));
         isExt(1:iRem) = true;
         if iRem < numel(e) - 5
-            strainTxt = sprintf('Extensometer to %.3g, then displacement', eX(iRem));
             fprintf('Extensometer removed at strain %.4g; continuing with displacement.\n', eX(iRem));
-        else
-            strainTxt = 'Extensometer';
         end
     else
         fprintf(['Axial Strain column is flat - extensometer was not recording.\n' ...
@@ -360,24 +344,13 @@ else
                'Final width',       pm(Wf, dimUnc), 'in'
                'Final thickness',   pm(tf, dimUnc), 'in'};
 end
-areaRows = {'Initial area', pm(A,  A*relA),   'in^2'
-            'Final area',   pm(Af, Af*relAf), 'in^2'};
-if any(isExt), extRow = {'Extensometer', ['+/- ' fmt(extUnc)], 'in/in'};
-else,          extRow = cell(0, 3); end
 
 rows = [
     {'LAB MEASUREMENTS', '', ''}
     {'Initial gauge length', pm(L0, gaugeUnc), 'in'}
     {'Final gauge length',   pm(Lf, gaugeUnc), 'in'}
     dimRows
-    areaRows
-    {'Load cell', ['+/- ' fmt(loadUncPct) '% of reading'], ''}
-    {'Crosshead displacement', ['+/- ' fmt(dispUnc)], 'in'}
-    extRow
-    {'Strain source', strainTxt, ''}
     {'RESULTS', '', ''}
-    {'Elongation',               pm(EL, ELu),   '%'}
-    {'Reduction of area',        pm(RA, RAu),   '%'}
     {'Ultimate stress',          pm(sU, sUu),   sUnit}
     {'Strain at ultimate',       pm(eU, eUu),   eUnit}
     {'Rupture stress',           pm(sR, sRu),   sUnit}
@@ -562,15 +535,6 @@ function idx = findCol(names, key)
     end
     if isempty(idx)
         error('Column "%s" not found. Columns in file: %s', key, strjoin(names, ', '));
-    end
-end
-
-%% Local function: number to short text for the table
-function str = fmt(x)
-    if isnan(x)
-        str = 'N/A';
-    else
-        str = sprintf('%.5g', x);
     end
 end
 
