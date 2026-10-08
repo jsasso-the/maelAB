@@ -20,6 +20,10 @@
 %  - the slack "toe" at the start is removed so the curve starts at 0
 %  - nothing after the rupture point is plotted
 %
+% Ductility (from the before/after measurements):
+%   elongation      %EL = (Lf - Li)/Li * 100
+%   reduction area  %RA = (Ai - Af)/Ai * 100
+%
 % Uncertainties (propagated as independent errors, root-sum-square):
 %   area       A = w*t            dA/A  = sqrt((dw/w)^2 + (dt/t)^2)
 %              A = pi*d^2/4       dA/A  = 2*dd/d
@@ -39,23 +43,27 @@ testFolder  = 'M003';
 datFileName = '';              % '' = find the .dat file automatically, or e.g. 'specimen.dat'
 
 % ---- Specimen measurements (one row per specimen) [in] ----
-% key:   matched against the material folder name (not case sensitive;
-%        the longest key found in the folder name wins, so 'plastic 2'
-%        beats 'plastic')
-% shape: 'rect' (width x thickness) or 'round' (diameter, thickness = NaN)
-% NaN = not measured yet -> the stress axis falls back to axial force (lbf)
+% keys:  matched against the material folder name, ignoring case, spaces
+%        and punctuation; separate alternatives with '|'. The longest key
+%        found in the folder name wins, so 'plastic2' beats 'plastic'.
+% shape: 'rect' (width x thickness) or 'round' (diameter in the W columns,
+%        NaN in the t columns)
+% i = initial (before the test), f = final (after fracture)
+% NaN = not measured -> width/thickness: the stress axis falls back to
+%       axial force (lbf); final values: %EL / %RA show N/A
 specimens = {
-%   key              shape    width/diam  thickness  gauge length
-    'alum',          'rect',  NaN,        NaN,       2.0
-    'steel',         'rect',  NaN,        NaN,       2.0
-    'carbon fiber 40','rect', NaN,        NaN,       2.0
-    'carbon fiber 90','rect', NaN,        NaN,       2.0
-    'plastic',       'rect',  NaN,        NaN,       2.0
+%   keys                          shape   Li      Wi      ti      Lf      Wf      tf
+    'steel',                      'rect', 2.7535, 0.5100, 0.0650, 3.0065, 0.4355, 0.0575
+    'alum',                       'rect', 2.6430, 0.5160, 0.0615, 2.8455, 0.4650, 0.0550
+    'cf90|carbonfiber90',         'rect', 2.5110, 0.5240, 0.0605, 2.5640, 0.5205, 0.0600
+    'cf45|carbonfiber45|cf40|carbonfiber40', ...
+                                  'rect', 2.8900, 0.5145, 0.0565, 2.9610, 0.4705, 0.0615
+    'plastic',                    'rect', 2.0,    NaN,    NaN,    NaN,    NaN,    NaN      % <-- placeholder, enter measurements
     };
 
 % ---- Measurement uncertainties ----
-dimUnc     = 0.0005;           % +/- in, width/thickness/diameter (calipers)
-gaugeUnc   = 0.01;             % +/- in, gauge length
+dimUnc     = 0.00025;          % +/- in, width/thickness/diameter (calipers)
+gaugeUnc   = 0.00025;          % +/- in, gauge length (initial and final)
 loadUncPct = 1.0;              % +/- percent of reading, load cell
 dispUnc    = 0.001;            % +/- in, crosshead displacement
 extUnc     = 5e-5;             % +/- in/in, extensometer
@@ -89,14 +97,16 @@ datFile    = findDatFile(matPath, datFileName);
 fprintf('Material folder: %s\nDAT file:        %s\n', matPath, datFile);
 
 %% Specimen geometry
-[shape, dim1, dim2, L0] = lookupSpecimen(specimens, matName);
-if strcmpi(shape, 'round')
-    A    = pi*dim1^2/4;
-    relA = 2*dimUnc/dim1;
-else
-    A    = dim1*dim2;
-    relA = sqrt((dimUnc/dim1)^2 + (dimUnc/dim2)^2);
-end
+[shape, L0, Wi, ti, Lf, Wf, tf] = lookupSpecimen(specimens, matName);
+[A,  relA ] = sectionArea(shape, Wi, ti, dimUnc);
+[Af, relAf] = sectionArea(shape, Wf, tf, dimUnc);
+
+% Ductility from the before/after measurements
+EL   = (Lf - L0)/L0 * 100;
+ELu  = 100 * sqrt((gaugeUnc/L0)^2 + (Lf*gaugeUnc/L0^2)^2);
+RA   = (A - Af)/A * 100;
+RAu  = 100 * (Af/A) * sqrt(relA^2 + relAf^2);
+
 haveArea = isfinite(A) && A > 0;
 if ~haveArea
     relA = 0;
@@ -342,26 +352,32 @@ legend(ax, hLeg, legTxt, 'Location', 'best');
 
 %% Results table
 if strcmpi(shape, 'round')
-    dimRows = {'Diameter', pm(dim1, dimUnc), 'in'};
+    dimRows = {'Initial diameter', pm(Wi, dimUnc), 'in'
+               'Final diameter',   pm(Wf, dimUnc), 'in'};
 else
-    dimRows = {'Width',     pm(dim1, dimUnc), 'in'
-               'Thickness', pm(dim2, dimUnc), 'in'};
+    dimRows = {'Initial width',     pm(Wi, dimUnc), 'in'
+               'Initial thickness', pm(ti, dimUnc), 'in'
+               'Final width',       pm(Wf, dimUnc), 'in'
+               'Final thickness',   pm(tf, dimUnc), 'in'};
 end
-if haveArea, areaRow = {'Cross-section area', pm(A, A*relA), 'in^2'};
-else,        areaRow = {'Cross-section area', 'not entered', 'in^2'}; end
+areaRows = {'Initial area', pm(A,  A*relA),   'in^2'
+            'Final area',   pm(Af, Af*relAf), 'in^2'};
 if any(isExt), extRow = {'Extensometer', ['+/- ' fmt(extUnc)], 'in/in'};
 else,          extRow = cell(0, 3); end
 
 rows = [
     {'LAB MEASUREMENTS', '', ''}
+    {'Initial gauge length', pm(L0, gaugeUnc), 'in'}
+    {'Final gauge length',   pm(Lf, gaugeUnc), 'in'}
     dimRows
-    areaRow
-    {'Gauge length', pm(L0, gaugeUnc), 'in'}
+    areaRows
     {'Load cell', ['+/- ' fmt(loadUncPct) '% of reading'], ''}
     {'Crosshead displacement', ['+/- ' fmt(dispUnc)], 'in'}
     extRow
     {'Strain source', strainTxt, ''}
     {'RESULTS', '', ''}
+    {'Elongation',               pm(EL, ELu),   '%'}
+    {'Reduction of area',        pm(RA, RAu),   '%'}
     {'Ultimate stress',          pm(sU, sUu),   sUnit}
     {'Strain at ultimate',       pm(eU, eUu),   eUnit}
     {'Rupture stress',           pm(sR, sRu),   sUnit}
@@ -386,19 +402,37 @@ if saveFigure
 end
 
 %% Local function: specimen row whose key appears in the folder name
-function [shape, dim1, dim2, L0] = lookupSpecimen(specimens, matName)
-    keys = specimens(:, 1);
-    hit  = find(cellfun(@(k) contains(lower(matName), lower(k)), keys));
-    if isempty(hit)
+% Case, spaces and punctuation are ignored; '|' separates alternative keys.
+function [shape, Li, Wi, ti, Lf, Wf, tf] = lookupSpecimen(specimens, matName)
+    norm = @(x) regexprep(lower(x), '[^a-z0-9|]', '');
+    folder = norm(matName);
+    best = 0;
+    bestLen = 0;
+    for r = 1:size(specimens, 1)
+        for key = strsplit(norm(specimens{r, 1}), '|')
+            if ~isempty(key{1}) && contains(folder, key{1}) && numel(key{1}) > bestLen
+                best = r;
+                bestLen = numel(key{1});
+            end
+        end
+    end
+    if best == 0
         error(['No row in the specimens table matches the folder "%s".\n' ...
             'Add a row whose key is part of that folder name.'], matName);
     end
-    [~, i] = max(cellfun(@numel, keys(hit)));        % most specific key
-    row   = specimens(hit(i), :);
-    shape = row{2};
-    dim1  = row{3};
-    dim2  = row{4};
-    L0    = row{5};
+    row = specimens(best, :);
+    [shape, Li, Wi, ti, Lf, Wf, tf] = row{2:8};
+end
+
+%% Local function: cross-section area and its relative uncertainty
+function [A, relA] = sectionArea(shape, w, t, dimUnc)
+    if strcmpi(shape, 'round')
+        A    = pi*w^2/4;
+        relA = 2*dimUnc/w;
+    else
+        A    = w*t;
+        relA = sqrt((dimUnc/w)^2 + (dimUnc/t)^2);
+    end
 end
 
 %% Local function: elastic slope from a straight-line fit
