@@ -1,11 +1,13 @@
-% Stress-strain curve from an MTS .DAT file, with a 0.2% offset line, error
-% bars, and the yield, ultimate and rupture points, plus a table of the
-% results in the same figure window.
+% Stress-strain curve from an MTS .DAT file, with a 0.2% offset line,
+% uncertainty bars, and the yield, ultimate and rupture points, plus a table
+% of the lab measurements and results (with uncertainties) in the same
+% figure window.
 %
 % Folder layout:
 %   MAE Solids datasets\M003\<material folder>\...\<file>.dat
 % Set "material" below to the material folder name; the script finds the
 % folder, finds the .dat file inside it, reads it, and makes the figure.
+% Enter each specimen's measurements once in the "specimens" table.
 %
 % DAT file (MTS 793 export): a few header lines, then a tab-delimited line of
 % channel names (Axial Force, Axial Displacement, Axial Strain), a line of
@@ -17,6 +19,16 @@
 %    from crosshead displacement after it was removed (or if it never was on)
 %  - the slack "toe" at the start is removed so the curve starts at 0
 %  - nothing after the rupture point is plotted
+%
+% Uncertainties (propagated as independent errors, root-sum-square):
+%   area       A = w*t            dA/A  = sqrt((dw/w)^2 + (dt/t)^2)
+%              A = pi*d^2/4       dA/A  = 2*dd/d
+%   stress     s = F/A            ds/s  = sqrt((dF/F)^2 + (dA/A)^2)
+%   strain     e = dL/L0          de    = sqrt((d(dL)/L0)^2 + (e*dL0/L0)^2)
+%              (extensometer)     de    = extensometer accuracy
+%   modulus    E = slope of fit   dE/E  = sqrt((SE/E)^2 + (ds/s)^2 + (de/e)^2)
+%   toughness  UT = area under curve      dUT/UT = sqrt((ds/s)^2 + (deR/eR)^2)
+%   resilience Ur = sY^2/(2E)             dUr/Ur = sqrt((2*dsY/sY)^2 + (dE/E)^2)
 clear; clc; close all;
 
 %% ===================== USER SETTINGS =====================
@@ -26,20 +38,35 @@ baseFolder  = 'C:\Users\jsasso\OneDrive - Syracuse University\MAE Solids dataset
 testFolder  = 'M003';
 datFileName = '';              % '' = find the .dat file automatically, or e.g. 'specimen.dat'
 
-% ---- Stress ----
-% [] = plot axial force (lbf) directly as the stress axis.
-% Give the cross-sectional area [in^2] to get true engineering stress (psi),
-% e.g. round bar: specimenArea = pi*0.505^2/4;  flat bar: specimenArea = 0.5*0.125;
-specimenArea = [];
+% ---- Specimen measurements (one row per specimen) [in] ----
+% key:   matched against the material folder name (not case sensitive;
+%        the longest key found in the folder name wins, so 'plastic 2'
+%        beats 'plastic')
+% shape: 'rect' (width x thickness) or 'round' (diameter, thickness = NaN)
+% NaN = not measured yet -> the stress axis falls back to axial force (lbf)
+specimens = {
+%   key              shape    width/diam  thickness  gauge length
+    'alum',          'rect',  NaN,        NaN,       2.0
+    'steel',         'rect',  NaN,        NaN,       2.0
+    'carbon fiber 40','rect', NaN,        NaN,       2.0
+    'carbon fiber 90','rect', NaN,        NaN,       2.0
+    'plastic',       'rect',  NaN,        NaN,       2.0
+    };
+
+% ---- Measurement uncertainties ----
+dimUnc     = 0.0005;           % +/- in, width/thickness/diameter (calipers)
+gaugeUnc   = 0.01;             % +/- in, gauge length
+loadUncPct = 1.0;              % +/- percent of reading, load cell
+dispUnc    = 0.001;            % +/- in, crosshead displacement
+extUnc     = 5e-5;             % +/- in/in, extensometer
 
 % ---- Strain ----
 % 'auto'         = extensometer (Axial Strain) while it was recording, then
-%                  Axial Displacement / gaugeLength after it was removed;
+%                  Axial Displacement / gauge length after it was removed;
 %                  displacement only if the extensometer was never on
 % 'strain'       = extensometer only
-% 'displacement' = Axial Displacement / gaugeLength only
+% 'displacement' = Axial Displacement / gauge length only
 strainSource    = 'auto';
-gaugeLength     = 2.0;         % [in] specimen gauge length, used for displacement-based strain
 toeCompensation = true;        % remove the slack at the start so the elastic line starts at 0
 
 % ---- 0.2% offset / elastic fit ----
@@ -49,11 +76,7 @@ fitRange  = [];                % [] = automatic (steepest straight part of the c
 breakDrop = 0.10;              % a sudden load drop bigger than this fraction of ultimate
                                % is the break; nothing after the rupture is plotted
 
-% ---- Error bars ----
-stressErrPct = 1.0;            % +/- percent of reading (load cell accuracy)
-strainErrAbs = 5e-5;           % +/- strain (in/in)
-nErrorBars   = 15;             % number of points along the curve that get error bars
-
+nErrorBars = 15;               % number of points along the curve that get uncertainty bars
 saveFigure = false;            % true = save .png and .fig into the material folder
 %% =========================================================
 
@@ -64,6 +87,24 @@ matPath    = findSubfolder(testPath, material);
 [~, matName] = fileparts(matPath);
 datFile    = findDatFile(matPath, datFileName);
 fprintf('Material folder: %s\nDAT file:        %s\n', matPath, datFile);
+
+%% Specimen geometry
+[shape, dim1, dim2, L0] = lookupSpecimen(specimens, matName);
+if strcmpi(shape, 'round')
+    A    = pi*dim1^2/4;
+    relA = 2*dimUnc/dim1;
+else
+    A    = dim1*dim2;
+    relA = sqrt((dimUnc/dim1)^2 + (dimUnc/dim2)^2);
+end
+haveArea = isfinite(A) && A > 0;
+if ~haveArea
+    relA = 0;
+    fprintf('No specimen dimensions for "%s" - plotting axial force instead of stress.\n', matName);
+end
+if ~isfinite(L0) || L0 <= 0
+    error('Enter the gauge length for "%s" in the specimens table.', matName);
+end
 
 %% Read the data
 [data, names, units] = readMtsDat(datFile);
@@ -78,12 +119,13 @@ data = data(good, :);
 if size(data, 1) < 10, error('Not enough data points in %s.', datFile); end
 
 F  = data(:, iF);
-eD = data(:, iD) / gaugeLength;
+eD = data(:, iD) / L0;
 eD = eD - eD(1);
 
 %% Strain
 e = eD;
-strainTxt = sprintf('Displacement / %g in', gaugeLength);
+isExt = false(size(e));             % which points come from the extensometer
+strainTxt = sprintf('Displacement / %g in', L0);
 if ~strcmpi(strainSource, 'displacement') && ~isempty(iE)
     eX = data(:, iE);
     if contains(units{iE}, '%'), eX = eX/100; end    % percent -> in/in
@@ -91,6 +133,7 @@ if ~strcmpi(strainSource, 'displacement') && ~isempty(iE)
     [~, iRem] = max(eX);                             % last reading before the extensometer came off
     if strcmpi(strainSource, 'strain')
         e = eX;
+        isExt(:) = true;
         strainTxt = 'Extensometer';
     elseif eX(iRem) - min(eX(1:iRem)) >= 1e-3        % a real test goes well past 0.1% strain
         % after removal, continue with displacement, scaled to match the
@@ -100,6 +143,7 @@ if ~strcmpi(strainSource, 'displacement') && ~isempty(iE)
         if ~isfinite(k) || k <= 0, k = 1; end
         e = eX;
         e(iRem+1:end) = eX(iRem) + k*(eD(iRem+1:end) - eD(iRem));
+        isExt(1:iRem) = true;
         if iRem < numel(e) - 5
             strainTxt = sprintf('Extensometer to %.3g, then displacement', eX(iRem));
             fprintf('Extensometer removed at strain %.4g; continuing with displacement.\n', eX(iRem));
@@ -108,26 +152,31 @@ if ~strcmpi(strainSource, 'displacement') && ~isempty(iE)
         end
     else
         fprintf(['Axial Strain column is flat - extensometer was not recording.\n' ...
-            'Using Axial Displacement / gauge length (%g in) for strain.\n'], gaugeLength);
+            'Using Axial Displacement / gauge length (%g in) for strain.\n'], L0);
     end
 end
 eUnit = 'in/in';
+eUnc = sqrt((dispUnc/L0)^2 + (e*gaugeUnc/L0).^2);
+eUnc(isExt) = extUnc;
 
 %% Stress
-if isempty(specimenArea)
+if haveArea
+    s = F / A;
+    switch lower(fUnit)
+        case 'lbf', sUnit = 'psi';   uUnit = 'in-lbf/in^3';
+        case 'kip', sUnit = 'ksi';   uUnit = 'in-kip/in^3';
+        case 'n',   sUnit = 'MPa';   uUnit = 'MJ/m^3';     % area in mm^2
+        otherwise,  sUnit = [fUnit '/area']; uUnit = sUnit;
+    end
+    sLabel = sprintf('Engineering Stress (%s)', sUnit);
+else
     s = F;
     sUnit  = fUnit;
+    uUnit  = [fUnit '*in/in'];
     sLabel = sprintf('Stress - Axial Force (%s)', sUnit);
-else
-    s = F / specimenArea;
-    switch lower(fUnit)
-        case 'lbf', sUnit = 'psi';
-        case 'kip', sUnit = 'ksi';
-        case 'n',   sUnit = 'MPa';    % area in mm^2
-        otherwise,  sUnit = [fUnit '/area'];
-    end
-    sLabel = sprintf('Stress (%s)', sUnit);
 end
+relS = sqrt((loadUncPct/100)^2 + relA^2);   % relative stress uncertainty
+sUnc = abs(s) * relS;
 
 %% Break: biggest sudden load drop after the ultimate
 % It can be one sample or spread over a few, and the load cell may not read
@@ -151,8 +200,19 @@ if iR == numel(s)
     fprintf('No break found in the data; rupture is the last data point.\n');
 end
 
-%% Elastic modulus (linear fit)
+%% Young's modulus (linear fit) and its uncertainty
 [E, b, idxFit] = fitElastic(e(1:iR), s(1:iR), fitRange);
+ef = e(idxFit);
+sf = s(idxFit);
+res = sf - (E*ef + b);
+seE = sqrt(sum(res.^2)/max(1, numel(ef) - 2)) / sqrt(sum((ef - mean(ef)).^2));   % std. error of slope
+spanFit = max(ef) - min(ef);
+if isExt(idxFit(1))
+    relEfit = sqrt(2)*extUnc/spanFit;
+else
+    relEfit = sqrt((sqrt(2)*dispUnc/L0/spanFit)^2 + (gaugeUnc/L0)^2);
+end
+EUnc = abs(E) * sqrt((seE/E)^2 + relS^2 + relEfit^2);
 
 %% Rupture = start of the final load drop
 % Ductile samples can tear for a while before the last snap; walk back from
@@ -169,37 +229,41 @@ if E > 0
         iR = lo + k - 1;
     end
 end
-s = s(1:iR);
-e = e(1:iR);
+s    = s(1:iR);
+e    = e(1:iR);
+sUnc = sUnc(1:iR);
+eUnc = eUnc(1:iR);
 
 %% Toe compensation: shift so the elastic line passes through 0
 kStart = idxFit(1);
 if toeCompensation && E > 0
-    e0 = -b/E;
-    e  = [0; e(idxFit(1):end) - e0];
-    s  = [0; s(idxFit(1):end)];
-    b  = 0;
+    e0   = -b/E;
+    e    = [0; e(idxFit(1):end) - e0];
+    s    = [0; s(idxFit(1):end)];
+    sUnc = [0; sUnc(idxFit(1):end)];
+    eUnc = [0; eUnc(idxFit(1):end)];
+    b    = 0;
     kStart = 2;
 end
 
 %% Ultimate, rupture and 0.2% offset yield
 [sU, iU] = max(s);
-eU = e(iU);
-iR = numel(s);
-sR = s(iR);
-eR = e(iR);
+eU  = e(iU);    sUu = sUnc(iU);    eUu = eUnc(iU);
+iR  = numel(s);
+sR  = s(iR);    sRu = sUnc(iR);    eR  = e(iR);    eRu = eUnc(iR);
 
-sY = NaN;
-eY = NaN;
+sY = NaN;  eY = NaN;  sYu = NaN;  eYu = NaN;
 if isfinite(E) && E > 0
     % offset line: s = E*(e - offset) + b; yield is where the curve first
     % drops below it
     g = s - (E*(e - offset) + b);
     k = find(g(kStart:end) <= 0, 1) + kStart - 1;
     if ~isempty(k) && k > 1
-        t  = g(k-1) / (g(k-1) - g(k));
-        eY = e(k-1) + t*(e(k) - e(k-1));
-        sY = s(k-1) + t*(s(k) - s(k-1));
+        t   = g(k-1) / (g(k-1) - g(k));
+        eY  = e(k-1) + t*(e(k) - e(k-1));
+        sY  = s(k-1) + t*(s(k) - s(k-1));
+        sYu = abs(sY) * relS;
+        eYu = eUnc(k);
     end
 else
     warning('Elastic slope is not positive (E = %.3g); 0.2%% offset yield cannot be found.', E);
@@ -208,19 +272,23 @@ if isnan(sY)
     fprintf('The curve never crosses the 0.2%% offset line (brittle sample); no yield point.\n');
 end
 
+%% Modulus of toughness (area under the curve) and resilience (sY^2 / 2E)
+UT  = trapz(e, s);
+UTu = abs(UT) * sqrt(relS^2 + (eRu/eR)^2);
+Ur  = sY^2 / (2*E);
+Uru = abs(Ur) * sqrt((2*sYu/sY)^2 + (EUnc/E)^2);
+
 %% Figure: plot on the left, table on the right
 fig = figure('Name', sprintf('%s stress-strain', matName), 'NumberTitle', 'off', ...
-    'Color', 'w', 'Position', [80 80 1400 650]);
-ax = axes(fig, 'Position', [0.06 0.11 0.56 0.80]);
+    'Color', 'w', 'Position', [60 60 1500 700]);
+ax = axes(fig, 'Position', [0.05 0.10 0.50 0.82]);
 hold(ax, 'on');
 
 hCurve = plot(ax, e, s, '-', 'LineWidth', 1.5, 'Color', [0 0.3 0.6]);
 
-% Error bars on evenly spaced points along the curve
+% Uncertainty bars on evenly spaced points along the curve
 ib   = unique(round(linspace(1, iR, min(nErrorBars, iR))));
-sErr = stressErrPct/100 * abs(s(ib));
-eErr = strainErrAbs * ones(size(ib(:)));
-hErr = errorbar(ax, e(ib), s(ib), sErr, sErr, eErr, eErr, 'LineStyle', 'none', ...
+hErr = errorbar(ax, e(ib), s(ib), sUnc(ib), sUnc(ib), eUnc(ib), eUnc(ib), 'LineStyle', 'none', ...
     'Color', [0.5 0.5 0.5], 'CapSize', 4);
 
 % 0.2% offset line, from zero stress up to a bit past yield
@@ -266,42 +334,71 @@ if eSpan > 0, xlim(ax, [min(0, min(e)), max(e) + 0.05*eSpan]); end
 if sSpan > 0, ylim(ax, [min(0, min(s)), sU + 0.12*sSpan]); end
 
 hLeg = [hCurve hErr hOff hY hU hR];
-legTxt = {'Stress-strain curve', sprintf('Error (\\pm%g%% stress, \\pm%g strain)', stressErrPct, strainErrAbs)};
+legTxt = {'Stress-strain curve', 'Uncertainty'};
 if ~isempty(hOff), legTxt{end+1} = sprintf('%g%% offset line', offset*100); end
 if ~isempty(hY),   legTxt{end+1} = 'Yield (0.2% offset)'; end
 legTxt = [legTxt {'Ultimate', 'Rupture'}];
 legend(ax, hLeg, legTxt, 'Location', 'best');
 
-% Results table
-if isempty(specimenArea), areaTxt = 'not given'; else, areaTxt = fmt(specimenArea); end
-[~, fName, fExt] = fileparts(datFile);
-rows = {
-    'Material',                matName,          ''
-    'DAT file',                [fName fExt],     ''
-    'Data points',             fmt(iR),          ''
-    'Cross-section area',      areaTxt,          'in^2'
-    'Strain source',           strainTxt,        ''
-    'Elastic modulus E',       fmt(E),           sUnit
-    '0.2% yield stress',       fmt(sY),          sUnit
-    'Strain at yield',         fmt(eY),          eUnit
-    'Ultimate stress',         fmt(sU),          sUnit
-    'Strain at ultimate',      fmt(eU),          eUnit
-    'Rupture stress',          fmt(sR),          sUnit
-    'Strain at rupture',       fmt(eR),          eUnit
-    'Stress error',            ['+/- ' fmt(stressErrPct) '%'], 'of reading'
-    'Strain error',            ['+/- ' fmt(strainErrAbs)],     eUnit
-    };
-uitable(fig, 'Data', rows, 'ColumnName', {'Property', 'Value', 'Units'}, ...
-    'RowName', [], 'Units', 'normalized', 'Position', [0.65 0.11 0.33 0.80], ...
-    'ColumnWidth', {150, 160, 90}, 'FontSize', 11);
+%% Results table
+if strcmpi(shape, 'round')
+    dimRows = {'Diameter', pm(dim1, dimUnc), 'in'};
+else
+    dimRows = {'Width',     pm(dim1, dimUnc), 'in'
+               'Thickness', pm(dim2, dimUnc), 'in'};
+end
+if haveArea, areaRow = {'Cross-section area', pm(A, A*relA), 'in^2'};
+else,        areaRow = {'Cross-section area', 'not entered', 'in^2'}; end
+if any(isExt), extRow = {'Extensometer', ['+/- ' fmt(extUnc)], 'in/in'};
+else,          extRow = cell(0, 3); end
 
-disp(cell2table(rows, 'VariableNames', {'Property', 'Value', 'Units'}));
+rows = [
+    {'LAB MEASUREMENTS', '', ''}
+    dimRows
+    areaRow
+    {'Gauge length', pm(L0, gaugeUnc), 'in'}
+    {'Load cell', ['+/- ' fmt(loadUncPct) '% of reading'], ''}
+    {'Crosshead displacement', ['+/- ' fmt(dispUnc)], 'in'}
+    extRow
+    {'Strain source', strainTxt, ''}
+    {'RESULTS', '', ''}
+    {'Ultimate stress',          pm(sU, sUu),   sUnit}
+    {'Strain at ultimate',       pm(eU, eUu),   eUnit}
+    {'Rupture stress',           pm(sR, sRu),   sUnit}
+    {'Strain at rupture',        pm(eR, eRu),   eUnit}
+    {'Yield stress (0.2%)',      pm(sY, sYu),   sUnit}
+    {'Strain at yield',          pm(eY, eYu),   eUnit}
+    {'Young''s modulus E',       pm(E, EUnc),   sUnit}
+    {'Modulus of toughness',     pm(UT, UTu),   uUnit}
+    {'Modulus of resilience',    pm(Ur, Uru),   uUnit}
+    ];
+uitable(fig, 'Data', rows, 'ColumnName', {'Quantity', 'Value', 'Units'}, ...
+    'RowName', [], 'Units', 'normalized', 'Position', [0.58 0.10 0.40 0.82], ...
+    'ColumnWidth', {175, 260, 110}, 'FontSize', 11);
+
+disp(cell2table(rows, 'VariableNames', {'Quantity', 'Value', 'Units'}));
 
 if saveFigure
     outBase = fullfile(matPath, [matName '_stress_strain']);
     saveas(fig, [outBase '.png']);
     savefig(fig, [outBase '.fig']);
     fprintf('Saved %s.png and .fig\n', outBase);
+end
+
+%% Local function: specimen row whose key appears in the folder name
+function [shape, dim1, dim2, L0] = lookupSpecimen(specimens, matName)
+    keys = specimens(:, 1);
+    hit  = find(cellfun(@(k) contains(lower(matName), lower(k)), keys));
+    if isempty(hit)
+        error(['No row in the specimens table matches the folder "%s".\n' ...
+            'Add a row whose key is part of that folder name.'], matName);
+    end
+    [~, i] = max(cellfun(@numel, keys(hit)));        % most specific key
+    row   = specimens(hit(i), :);
+    shape = row{2};
+    dim1  = row{3};
+    dim2  = row{4};
+    L0    = row{5};
 end
 
 %% Local function: elastic slope from a straight-line fit
@@ -440,5 +537,27 @@ function str = fmt(x)
         str = 'N/A';
     else
         str = sprintf('%.5g', x);
+    end
+end
+
+%% Local function: "value +/- uncertainty" text for the table
+% Uncertainty to 2 significant figures, value to the same decimal place;
+% very large or small numbers as (m +/- dm)e+XX.
+function str = pm(x, dx)
+    if isnan(x)
+        str = 'N/A';
+        return;
+    elseif isnan(dx) || dx <= 0
+        str = sprintf('%.5g', x);
+        return;
+    end
+    p = floor(log10(dx)) - 1;               % place of the 2nd significant figure
+    if abs(x) >= 1e5 || (abs(x) < 1e-3 && x ~= 0)
+        ex  = floor(log10(abs(x)));
+        dec = max(0, ex - p);
+        str = sprintf('(%.*f %s %.*f)e%+03d', dec, x/10^ex, char(177), dec, dx/10^ex, ex);
+    else
+        dec = max(0, -p);
+        str = sprintf('%.*f %s %.*f', dec, x, char(177), dec, dx);
     end
 end
