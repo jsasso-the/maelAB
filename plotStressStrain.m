@@ -6,8 +6,8 @@
 % Figure 2: the materials in "compareMaterials" on one plot - the MTS
 %   displacement reading of each (plus the extensometer reading when
 %   includeExtensometer = true) with its own 0.2% offset line, uncertainty
-%   bars and yield point, plus tables comparing the readings, the
-%   materials, and published values.
+%   bars and yield point, the true stress-strain curve of each material,
+%   plus tables comparing the readings, the materials, and published values.
 %
 % Folder layout:
 %   MAE Solids datasets\M003\<material folder>\...\<file>.dat
@@ -37,6 +37,7 @@
 %   resilience Ur = sY^2/(2E)             dUr/Ur = sqrt((2*dsY/sY)^2 + (dE/E)^2)
 %   true rupture stress  sTR = F_R/Af     dsTR/sTR = sqrt((dF/F)^2 + (dAf/Af)^2)
 %   true rupture strain  eTR = ln(Ai/Af)  deTR     = sqrt((dAi/Ai)^2 + (dAf/Af)^2)
+%   true curve (to the ultimate, before necking)  sT = s*(1 + e),  eT = ln(1 + e)
 %   percent difference   |measured - reference| / reference * 100
 clear; clc; close all;
 
@@ -74,8 +75,8 @@ specimens = {
 % <-- replace with the alloys / values from your lab handout
 published = {
 %   keys       name                        yield    ultimate  rupture  Young's modulus
-    'steel',   'AISI 1018 cold drawn',     53700,   63800,    NaN,     29.7e6
-    'alum',    '6061-T6',                  40000,   45000,    NaN,     10.0e6
+    'steel',   'AISI 1018 cold drawn',     53700,   63800,    NaN,     29.7e6     % <-- enter published rupture stress
+    'alum',    '6061-T6',                  40000,   45000,    NaN,     10.0e6     % <-- enter published rupture stress
     };
 
 % ---- Measurement uncertainties ----
@@ -219,26 +220,34 @@ if ~isempty(compareMaterials)
     % readings to plot: MTS displacement, plus the extensometer if asked for
     % and the file has it
     useExt = cellfun(@(c) includeExtensometer && ~isempty(c.rX), Ms);
-    R = cell(0, 3);                 % {analyzed curve, legend name, short label}
+    R = cell(0, 4);                 % {analyzed curve, legend name, short label, material (0 = extensometer)}
     for m = 1:numel(Ms)
         if useExt(m)
-            R(end+1, :) = {Ms{m}.rX, [Ms{m}.name ' - extensometer'],     [Ms{m}.name ' ext.']};
+            R(end+1, :) = {Ms{m}.rX, [Ms{m}.name ' - extensometer'],     [Ms{m}.name ' ext.'], 0};
         end
-        R(end+1, :) = {Ms{m}.rD, [Ms{m}.name ' - MTS displacement'], [Ms{m}.name ' MTS']};
+        R(end+1, :) = {Ms{m}.rD, [Ms{m}.name ' - MTS displacement'], [Ms{m}.name ' MTS'], m};
+    end
+
+    % true stress-strain up to the ultimate (valid until necking starts)
+    for m = 1:numel(Ms)
+        iUm = Ms{m}.pD.iU;
+        eEng = Ms{m}.rD.e(1:iUm);
+        Ms{m}.eT = log(1 + eEng);
+        Ms{m}.sT = Ms{m}.rD.s(1:iUm) .* (1 + eEng);
     end
     colors = [0 0.3 0.6; 0.85 0.33 0.1; 0.2 0.6 0.2; 0.5 0.2 0.6; 0.6 0.5 0.1; 0.3 0.3 0.3];
 
     fig2 = figure('Name', 'Stress-strain comparison', 'NumberTitle', 'off', ...
         'Color', 'w', 'Position', [40 40 1650 820]);
-    ax2 = axes(fig2, 'Position', [0.04 0.08 0.43 0.85]);
+    ax2 = axes(fig2, 'Position', [0.055 0.08 0.415 0.85]);
     hold(ax2, 'on');
-    sMax = max(cellfun(@(c) max(c.s), R(:, 1)));
-    eMax = max(cellfun(@(c) max(c.e), R(:, 1)));
+    sMax = max([cellfun(@(c) max(c.s), R(:, 1)); cellfun(@(c) max([c.sT; c.sTR]), Ms(:))]);
+    eMax = max([cellfun(@(c) max(c.e), R(:, 1)); cellfun(@(c) max([c.eT; c.eTR]), Ms(:))]);
     h2 = gobjects(0);
     leg2 = {};
     labY = [];                      % heights of the yield labels placed so far
     for q = 1:size(R, 1)
-        [rq, nameq, shortq] = R{q, :};
+        [rq, nameq, shortq, mq] = R{q, :};
         cq = colors(mod(q - 1, size(colors, 1)) + 1, :);
         h2(end+1) = plot(ax2, rq.e, rq.s, '-', 'LineWidth', 1.5, 'Color', cq);
         leg2{end+1} = nameq;
@@ -264,12 +273,25 @@ if ~isempty(compareMaterials)
                 'VerticalAlignment', 'top', 'HorizontalAlignment', 'left', 'Color', cq, ...
                 'Interpreter', 'none', 'BackgroundColor', 'w', 'Margin', 1);
         end
+        if mq > 0                   % true curve and true rupture point, same color as the MTS curve
+            Mm = Ms{mq};
+            h2(end+1) = plot(ax2, Mm.eT, Mm.sT, '-.', 'LineWidth', 1.5, 'Color', cq);
+            leg2{end+1} = sprintf('True stress-strain (%s)', Mm.name);
+            if isfinite(Mm.sTR) && isfinite(Mm.eTR)
+                h2(end+1) = plot(ax2, Mm.eTR, Mm.sTR, 'd', 'MarkerSize', 9, 'LineWidth', 1.5, ...
+                    'MarkerFaceColor', cq, 'MarkerEdgeColor', 'k');
+                leg2{end+1} = sprintf('True rupture (%s)', Mm.name);
+                text(ax2, Mm.eTR - 0.012*eMax, Mm.sTR, sprintf('True rupture, %s (%.4g, %.0f)', Mm.name, Mm.eTR, Mm.sTR), ...
+                    'VerticalAlignment', 'middle', 'HorizontalAlignment', 'right', 'Color', cq, ...
+                    'Interpreter', 'none', 'BackgroundColor', 'w', 'Margin', 1);
+            end
+        end
     end
     hold(ax2, 'off');
     grid(ax2, 'on');
     box(ax2, 'on');
-    xlabel(ax2, 'Axial Strain (in/in)');
-    ylabel(ax2, Ms{1}.sLabel);
+    xlabel(ax2, 'Engineering / True Strain (in/in)');
+    ylabel(ax2, strrep(Ms{1}.sLabel, 'Engineering Stress', 'Engineering / True Stress'));
     if any(useExt), ttl = 'Stress vs. Strain - '; else, ttl = 'Stress vs. Strain (MTS displacement) - '; end
     title(ax2, [ttl strjoin(cellfun(@(c) c.name, Ms, 'UniformOutput', false), ' vs. ')], ...
         'Interpreter', 'none');
@@ -357,7 +379,8 @@ if ~isempty(compareMaterials)
         strainNote = 'All strains are from the MTS crosshead displacement.';
     end
     note = {strainNote, ...
-            'True rupture: stress = rupture load / final area, strain = ln(initial area / final area).', ...
+            ['True curve (dash-dot): stress x (1 + strain) and ln(1 + strain), up to the ultimate (valid until necking). ' ...
+             'True rupture: rupture load / final area, ln(initial area / final area).'], ...
             'Percent difference = |measured - reference| / reference x 100 (reference: extensometer or published).', ...
             ['Published: ' strjoin(pubNames, '; ')]};
     uicontrol(fig2, 'Style', 'text', 'Units', 'normalized', 'Position', [0.49 0.06 0.50 0.14], ...
