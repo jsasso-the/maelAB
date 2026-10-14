@@ -1,5 +1,5 @@
-% All plastic samples on one plot: engineering stress-strain curves with
-% uncertainty bars.
+% Ultimate stress of every plastic sample: a table of each sample's ultimate
+% stress, and a summary table with the average, minimum and maximum.
 %
 % The script finds every folder inside M003 whose name contains
 % "plasticKey" (case, spaces and punctuation are ignored), and every .dat
@@ -12,19 +12,17 @@
 % channel names (Axial Force, Axial Displacement, Axial Strain), a line of
 % units (lbf, in, in/in), then the data.
 %
-%  - strain is crosshead displacement / gauge length (the extensometer
-%    channel is used instead if it was recording)
-%  - the slack "toe" at the start is removed so each curve starts at 0
-%  - nothing after the rupture point is plotted
+% Ultimate stress = highest engineering stress before rupture (load / initial area).
 %
 % Uncertainties (propagated as independent errors, root-sum-square):
 %   area       A = w*t            dA/A  = sqrt((dw/w)^2 + (dt/t)^2)
 %   stress     s = F/A            ds/s  = sqrt((dF/F)^2 + (dA/A)^2)
-%   strain     e = dL/L0          de    = sqrt((d(dL)/L0)^2 + (e*dL0/L0)^2)
+%   average    sAvg = sum(sU)/n   dsAvg = sqrt(sum(dsU.^2)) / n   (measurement uncertainty)
+%   spread     standard deviation of the n ultimate stresses (sample-to-sample scatter)
 clear; clc; close all;
 
 %% ===================== USER SETTINGS =====================
-plasticKey = 'plastic';        % <-- every folder in M003 whose name contains this is plotted
+plasticKey = 'plastic';        % <-- every folder in M003 whose name contains this is used
 
 baseFolder  = 'C:\Users\jsasso\OneDrive - Syracuse University\MAE Solids datasets';
 testFolder  = 'M003';
@@ -49,14 +47,13 @@ loadUncPct = 1.0;              % +/- percent of reading, load cell
 dispUnc    = 0.001;            % +/- in, crosshead displacement
 extUnc     = 5e-5;             % +/- in/in, extensometer
 
-toeCompensation = true;        % remove the slack at the start so each curve starts at 0
+toeCompensation = true;        % remove the slack at the start of each curve
 fitRange  = [];                % [] = automatic elastic fit (used for the toe removal), or
                                % fractions of ultimate stress, e.g. [0.10 0.40]
 breakDrop = 0.10;              % a sudden load drop bigger than this fraction of ultimate
-                               % is the break; nothing after the rupture is plotted
+                               % is the break; data after the rupture is ignored
 
-nErrorBars = 10;               % number of points along each curve that get uncertainty bars
-saveFigure = false;            % true = save .png and .fig in the M003 folder
+saveFigure = false;            % true = save the table figure (.png and .fig) in the M003 folder
 %% =========================================================
 
 S = struct('dimUnc', dimUnc, 'gaugeUnc', gaugeUnc, 'loadUncPct', loadUncPct, 'dispUnc', dispUnc, ...
@@ -101,38 +98,54 @@ fprintf('Found %d plastic samples.\n', numel(files));
 
 Ms = cellfun(@(n, f) processSample(n, f, S), labels, files, 'UniformOutput', false);
 
-%% Plot: engineering stress-strain curves with uncertainty bars
-colors = [0.12 0.47 0.71; 1.00 0.50 0.05; 0.17 0.63 0.17; 0.84 0.15 0.16; ...
-          0.58 0.40 0.74; 0.55 0.34 0.29; 0.89 0.47 0.76; 0.50 0.50 0.50; ...
-          0.74 0.74 0.13; 0.09 0.75 0.81; 0.00 0.20 0.45; 0.60 0.10 0.30];
-fig = figure('Name', 'Plastic samples stress-strain', 'NumberTitle', 'off', ...
-    'Color', 'w', 'Position', [70 70 1250 750]);
-ax = axes(fig);
-hold(ax, 'on');
-h = gobjects(0);
-leg = {};
-hErr = gobjects(0);
-for m = 1:numel(Ms)
-    r  = Ms{m}.r;
-    cm = colors(mod(m - 1, size(colors, 1)) + 1, :);
-    h(end+1) = plot(ax, r.e, r.s, '-', 'LineWidth', 1.5, 'Color', cm);
-    leg{end+1} = Ms{m}.name;
-    hE = drawUncertainty(ax, r.e, r.s, r.eUnc, r.sUnc, nErrorBars, 0.5*cm + 0.5);
-    if isempty(hErr), hErr = hE; end
-end
-hold(ax, 'off');
-grid(ax, 'on');
-box(ax, 'on');
-xlabel(ax, 'Axial Strain (in/in)');
-ylabel(ax, Ms{1}.sLabel);
-title(ax, sprintf('Stress vs. Strain - Plastic Samples (%d)', numel(Ms)));
-xlim(ax, [0, 1.05*max(cellfun(@(c) max(c.r.e), Ms))]);
-ylim(ax, [0, 1.12*max(cellfun(@(c) max(c.r.s), Ms))]);
-legend(ax, [h hErr], [leg {'Uncertainty (each sample, its color)'}], ...
-    'Location', 'eastoutside', 'Interpreter', 'none');
+%% Ultimate stress of each sample
+n   = numel(Ms);
+sU  = cellfun(@(c) c.p.sU,  Ms);
+sUu = cellfun(@(c) c.p.sUu, Ms);
+sUnit = Ms{1}.sUnit;
+
+[sMin, iMin] = min(sU);
+[sMax, iMax] = max(sU);
+sAvg  = mean(sU);
+sAvgU = sqrt(sum(sUu.^2)) / n;              % measurement uncertainty of the average
+if n > 1, sStd = std(sU); else, sStd = NaN; end
+
+summary = {
+    'Number of samples',            sprintf('%d', n),        '',     ''
+    'Average ultimate stress',      pm(sAvg, sAvgU),         sUnit,  ''
+    'Standard deviation',           pm(sStd, NaN),           sUnit,  'sample-to-sample scatter'
+    'Minimum ultimate stress',      pm(sMin, sUu(iMin)),     sUnit,  Ms{iMin}.name
+    'Maximum ultimate stress',      pm(sMax, sUu(iMax)),     sUnit,  Ms{iMax}.name
+    };
+perSample = [cellfun(@(c) c.name, Ms(:), 'UniformOutput', false), ...
+             arrayfun(@(k) pm(sU(k), sUu(k)), (1:n)', 'UniformOutput', false)];
+
+%% Tables
+fig = figure('Name', 'Plastic ultimate stress', 'NumberTitle', 'off', ...
+    'Color', 'w', 'Position', [70 70 1100 650]);
+uicontrol(fig, 'Style', 'text', 'Units', 'normalized', 'Position', [0.03 0.90 0.50 0.05], ...
+    'String', 'Plastic samples - ultimate stress summary', 'FontWeight', 'bold', 'FontSize', 12, ...
+    'BackgroundColor', 'w', 'HorizontalAlignment', 'left');
+uitable(fig, 'Data', summary, 'ColumnName', {'Quantity', 'Value', 'Units', 'Sample'}, ...
+    'RowName', [], 'Units', 'normalized', 'Position', [0.03 0.55 0.55 0.35], 'FontSize', 11, ...
+    'ColumnWidth', {190, 150, 60, 190});
+uicontrol(fig, 'Style', 'text', 'Units', 'normalized', 'Position', [0.62 0.90 0.35 0.05], ...
+    'String', 'Ultimate stress of each sample', 'FontWeight', 'bold', 'FontSize', 12, ...
+    'BackgroundColor', 'w', 'HorizontalAlignment', 'left');
+uitable(fig, 'Data', perSample, 'ColumnName', {'Sample', ['Ultimate stress (' sUnit ')']}, ...
+    'RowName', [], 'Units', 'normalized', 'Position', [0.62 0.05 0.35 0.85], 'FontSize', 11, ...
+    'ColumnWidth', {170, 170});
+uicontrol(fig, 'Style', 'text', 'Units', 'normalized', 'Position', [0.03 0.30 0.55 0.20], ...
+    'String', {'Ultimate stress = highest engineering stress (load / initial area) before rupture.', ...
+               'Average uncertainty = sqrt(sum of squared sample uncertainties) / n.', ...
+               'Standard deviation = scatter between the samples.'}, ...
+    'FontSize', 9, 'BackgroundColor', 'w', 'HorizontalAlignment', 'left');
+
+printTable('Plastic samples - ultimate stress summary', {'Quantity', 'Value', 'Units', 'Sample'}, summary);
+printTable('Ultimate stress of each sample', {'Sample', ['Ultimate stress (' sUnit ')']}, perSample);
 
 if saveFigure
-    outBase = fullfile(testPath, 'plastic_samples_stress_strain');
+    outBase = fullfile(testPath, 'plastic_ultimate_stress');
     saveas(fig, [outBase '.png']);
     savefig(fig, [outBase '.fig']);
     fprintf('Saved %s.png and .fig\n', outBase);
@@ -369,13 +382,6 @@ function r = analyzeCurve(e, s, eUnc, sUnc, isExt, P)
     r.Uru = abs(r.Ur) * sqrt((2*r.sYu/r.sY)^2 + (r.EUnc/E)^2);
 end
 
-%% Local function: uncertainty bars on evenly spaced points along a curve
-function h = drawUncertainty(ax, e, s, eUnc, sUnc, n, color)
-    ib = unique(round(linspace(1, numel(e), min(n, numel(e)))));
-    h  = errorbar(ax, e(ib), s(ib), sUnc(ib), sUnc(ib), eUnc(ib), eUnc(ib), 'LineStyle', 'none', ...
-        'Color', color, 'CapSize', 4);
-end
-
 %% Local function: row of a key table whose key appears in the folder name
 % Case, spaces and punctuation are ignored; '|' separates alternative keys.
 % A key ending in a number only matches that whole number ('plastic1' does
@@ -515,3 +521,37 @@ function idx = findCol(names, key)
     end
 end
 
+%% Local function: print a table to the Command Window
+function printTable(titleStr, cols, T)
+    fprintf('\n%s\n', titleStr);
+    T = [cols; T];
+    w = max(cellfun(@numel, T), [], 1);
+    for i = 1:size(T, 1)
+        for j = 1:size(T, 2)
+            fprintf('  %-*s', w(j), T{i, j});
+        end
+        fprintf('\n');
+    end
+end
+
+%% Local function: "value +/- uncertainty" text for the table
+% Uncertainty to 2 significant figures, value to the same decimal place;
+% very large or small numbers as (m +/- dm)e+XX.
+function str = pm(x, dx)
+    if isnan(x)
+        str = 'N/A';
+        return;
+    elseif isnan(dx) || dx <= 0
+        str = sprintf('%.5g', x);
+        return;
+    end
+    p = floor(log10(dx)) - 1;               % place of the 2nd significant figure
+    if abs(x) >= 1e5 || (abs(x) < 1e-3 && x ~= 0)
+        ex  = floor(log10(abs(x)));
+        dec = max(0, ex - p);
+        str = sprintf('(%.*f %s %.*f)e%+03d', dec, x/10^ex, char(177), dec, dx/10^ex, ex);
+    else
+        dec = max(0, -p);
+        str = sprintf('%.*f %s %.*f', dec, x, char(177), dec, dx);
+    end
+end
