@@ -19,6 +19,9 @@
 %   4. Carbon fiber      - "carbonMaterials" on one plot with uncertainty bars,
 %                          and a table of ultimate, rupture and toughness.
 %   5. All materials     - "allMaterials" on one plot with uncertainty bars.
+%   6. Plastic samples   - every .dat file in the folders matching "plasticKey"
+%                          (no plot): a table of each sample's ultimate stress
+%                          and a summary of the average, minimum and maximum.
 %
 % Folder layout:
 %   MAE Solids datasets\M003\<material folder>\...\<file>.dat
@@ -59,6 +62,7 @@ runExtVsMTS   = true;          % 2. extensometer vs. MTS displacement (steel)
 runComparison = true;          % 3. steel vs. aluminum comparison
 runCarbon     = true;          % 4. carbon fiber samples
 runAll        = true;          % 5. all materials on one plot
+runPlastic    = true;          % 6. plastic samples - ultimate stress tables
 
 % ---- Materials for each section (folders inside M003) ----
 singleMaterials   = {'m003alum', 'm003_steel'};          % 1. one figure each
@@ -72,6 +76,9 @@ allMaterials      = {'steel', 'alum', 'cf90|carbon fiber 90', 'cf45|carbon fiber
                                %    name of the one to plot)
 useExtensometer   = false;     % 5. false = MTS displacement strain for every material;
                                %    true  = extensometer while it was on, where a file has it
+plasticKey        = 'M003 Plastic';   % 6. every folder in M003 whose name contains this
+                                     %    (case, spaces and punctuation ignored); every
+                                     %    .dat file inside is one sample
 
 baseFolder  = 'C:\Users\jsasso\OneDrive - Syracuse University\MAE Solids datasets';
 testFolder  = 'M003';
@@ -80,7 +87,9 @@ datFileName = '';              % '' = find the .dat file automatically, or e.g. 
 % ---- Specimen measurements (one row per specimen) [in] ----
 % keys:  matched against the material folder name, ignoring case, spaces
 %        and punctuation; separate alternatives with '|'. The longest key
-%        found in the folder name wins, so 'plastic2' beats 'plastic'.
+%        found in the folder name wins, so 'plastic2' beats 'plastic'
+%        (and 'plastic1' does not match 'plastic12'). Plastic samples
+%        without their own row use the 'plastic' row.
 % shape: 'rect' (width x thickness) or 'round' (diameter in the W columns,
 %        NaN in the t columns)
 % i = initial (before the test), f = final (after fracture)
@@ -94,6 +103,7 @@ specimens = {
     'cf45|carbonfiber45|cf40|carbonfiber40', ...
                                   'rect', 2.8900, 0.5145, 0.0565, 2.9610, 0.4705, 0.0615
     'plastic',                    'rect', 3.0070, 0.5060, 0.1365, NaN,    NaN,    NaN      % <-- final measurements not entered
+%   'plastic 2',                  'rect', 3.0000, 0.5000, 0.1350, NaN,    NaN,    NaN      % <-- example: own row for one plastic sample
     };
 
 % ---- Published values for the percent differences (section 3) [psi] ----
@@ -197,6 +207,18 @@ if runAll && ~isempty(allMaterials)
         if saveFigure, saveFig(fig, fullfile(testPath, 'all_materials_stress_strain')); end
     catch err
         warning('All-materials figure skipped: %s', err.message);
+    end
+end
+
+%% ============ 6. Plastic samples - ultimate stress tables ============
+if runPlastic && ~isempty(plasticKey)
+    try
+        [labels, files] = findPlasticSamples(testPath, plasticKey);
+        Ps = cellfun(@(n, f) processSample(n, f, S), labels, files, 'UniformOutput', false);
+        fig = plotPlastic(Ps);
+        if saveFigure, saveFig(fig, fullfile(testPath, 'plastic_ultimate_stress')); end
+    catch err
+        warning('Plastic tables skipped: %s', err.message);
     end
 end
 
@@ -622,6 +644,94 @@ function fig = plotAll(Ms, useExtensometer, opt)
     legend(ax, h, leg, 'Location', 'eastoutside', 'Interpreter', 'none');
 end
 
+%% Local function: section 6 - every plastic sample (.dat file) found
+% Every folder in M003 whose name contains plasticKey (case, spaces and
+% punctuation ignored); every .dat file inside it (subfolders included) is
+% one sample, so it works whether each sample has its own folder (Plastic 1,
+% Plastic 2, ...) or several .dat files share one folder.
+function [labels, files] = findPlasticSamples(testPath, plasticKey)
+    norm = @(x) regexprep(lower(x), '[^a-z0-9]', '');
+    d = dir(testPath);
+    d = d([d.isdir] & ~startsWith({d.name}, '.'));
+    d = d(contains(cellfun(norm, {d.name}, 'UniformOutput', false), norm(plasticKey)));
+    if isempty(d), error('No folder in %s has "%s" in its name.', testPath, plasticKey); end
+    [~, order] = sort(naturalKey({d.name}));
+    d = d(order);
+
+    labels = {};
+    files  = {};
+    for k = 1:numel(d)
+        folder = fullfile(testPath, d(k).name);
+        f = dir(fullfile(folder, '**', '*'));
+        f = f(~[f.isdir] & endsWith({f.name}, '.dat', 'IgnoreCase', true));
+        if isempty(f)
+            warning('No .dat file in %s - skipped.', folder);
+            continue;
+        end
+        [~, order] = sort(naturalKey(fullfile({f.folder}, {f.name})));
+        f = f(order);
+        for j = 1:numel(f)
+            if numel(f) == 1
+                labels{end+1} = d(k).name;
+            else
+                [~, fn] = fileparts(f(j).name);
+                labels{end+1} = sprintf('%s - %s', d(k).name, fn);
+            end
+            files{end+1} = fullfile(f(j).folder, f(j).name);
+        end
+    end
+    fprintf('Found %d plastic samples.\n', numel(files));
+end
+
+%% Local function: section 6 - ultimate stress tables of the plastic samples
+% Average uncertainty = sqrt(sum(dsU.^2)) / n (measurement uncertainty);
+% standard deviation = sample-to-sample scatter.
+function fig = plotPlastic(Ms)
+    n   = numel(Ms);
+    sU  = cellfun(@(c) c.p.sU,  Ms);
+    sUu = cellfun(@(c) c.p.sUu, Ms);
+    sUnit = Ms{1}.sUnit;
+
+    [sMin, iMin] = min(sU);
+    [sMax, iMax] = max(sU);
+    sAvg  = mean(sU);
+    sAvgU = sqrt(sum(sUu.^2)) / n;          % measurement uncertainty of the average
+    if n > 1, sStd = std(sU); else, sStd = NaN; end
+
+    summary = {
+        'Number of samples',            sprintf('%d', n),        '',     ''
+        'Average ultimate stress',      pm(sAvg, sAvgU),         sUnit,  ''
+        'Standard deviation',           pm(sStd, NaN),           sUnit,  'sample-to-sample scatter'
+        'Minimum ultimate stress',      pm(sMin, sUu(iMin)),     sUnit,  Ms{iMin}.name
+        'Maximum ultimate stress',      pm(sMax, sUu(iMax)),     sUnit,  Ms{iMax}.name
+        };
+    perSample = [cellfun(@(c) c.name, Ms(:), 'UniformOutput', false), ...
+                 arrayfun(@(k) pm(sU(k), sUu(k)), (1:n)', 'UniformOutput', false)];
+
+    fig = figure('Name', 'Plastic ultimate stress', 'NumberTitle', 'off', ...
+        'Color', 'w', 'Position', [70 70 1100 650]);
+    uicontrol(fig, 'Style', 'text', 'Units', 'normalized', 'Position', [0.03 0.90 0.50 0.05], ...
+        'String', 'Plastic samples - ultimate stress summary', 'FontWeight', 'bold', 'FontSize', 12, ...
+        'BackgroundColor', 'w', 'HorizontalAlignment', 'left');
+    uitable(fig, 'Data', summary, 'ColumnName', {'Quantity', 'Value', 'Units', 'Sample'}, ...
+        'RowName', [], 'Units', 'normalized', 'Position', [0.03 0.55 0.55 0.35], 'FontSize', 11, ...
+        'ColumnWidth', {190, 150, 60, 190});
+    uicontrol(fig, 'Style', 'text', 'Units', 'normalized', 'Position', [0.62 0.90 0.35 0.05], ...
+        'String', 'Ultimate stress of each sample', 'FontWeight', 'bold', 'FontSize', 12, ...
+        'BackgroundColor', 'w', 'HorizontalAlignment', 'left');
+    uitable(fig, 'Data', perSample, 'ColumnName', {'Sample', ['Ultimate stress (' sUnit ')']}, ...
+        'RowName', [], 'Units', 'normalized', 'Position', [0.62 0.05 0.35 0.85], 'FontSize', 11, ...
+        'ColumnWidth', {170, 170});
+    uicontrol(fig, 'Style', 'text', 'Units', 'normalized', 'Position', [0.03 0.30 0.55 0.20], ...
+        'String', {'Ultimate stress = highest engineering stress (load / initial area) before rupture.', ...
+                   'Average uncertainty = sqrt(sum of squared sample uncertainties) / n.', ...
+                   'Standard deviation = scatter between the samples.'}, ...
+        'FontSize', 9, 'BackgroundColor', 'w', 'HorizontalAlignment', 'left');
+
+    printTable('Plastic samples - ultimate stress summary', {'Quantity', 'Value', 'Units', 'Sample'}, summary);
+    printTable('Ultimate stress of each sample', {'Sample', ['Ultimate stress (' sUnit ')']}, perSample);
+end
+
 %% Local function: material from the cache, or read and analyze it once
 function M = loadMaterial(name, S, cache)
     path = findSubfolder(findSubfolder(resolveBaseFolder(S.baseFolder), S.testFolder), name);
@@ -657,9 +767,18 @@ end
 function M = processMaterial(material, S)
     base     = resolveBaseFolder(S.baseFolder);
     testPath = findSubfolder(base, S.testFolder);
-    M.path   = findSubfolder(testPath, material);
-    [~, M.name] = fileparts(M.path);
-    M.datFile = findDatFile(M.path, S.datFileName);
+    path     = findSubfolder(testPath, material);
+    [~, name] = fileparts(path);
+    M = processSample(name, findDatFile(path, S.datFileName), S);
+    M.path = path;
+end
+
+%% Local function: read and analyze one .dat file
+% name is the label for the sample (also used to find its row in the
+% specimens table).
+function M = processSample(name, datFile, S)
+    M.name = name;
+    M.datFile = datFile;
     fprintf('\n%s\n  DAT file: %s\n', M.name, M.datFile);
 
     % specimen geometry
@@ -895,7 +1014,8 @@ end
 
 %% Local function: row of a key table whose key appears in the folder name
 % Case, spaces and punctuation are ignored; '|' separates alternative keys.
-% Returns 0 if no key matches.
+% A key ending in a number only matches that whole number ('plastic1' does
+% not match 'plastic12'). Returns 0 if no key matches.
 function best = matchKey(keys, folderName)
     norm = @(x) regexprep(lower(x), '[^a-z0-9|]', '');
     folder = norm(folderName);
@@ -903,11 +1023,36 @@ function best = matchKey(keys, folderName)
     bestLen = 0;
     for r = 1:numel(keys)
         for key = strsplit(norm(keys{r}), '|')
-            if ~isempty(key{1}) && contains(folder, key{1}) && numel(key{1}) > bestLen
+            if ~isempty(key{1}) && keyFound(folder, key{1}) && numel(key{1}) > bestLen
                 best = r;
                 bestLen = numel(key{1});
             end
         end
+    end
+end
+
+%% Local function: key appears in text, not followed by a digit if it ends in one
+function tf = keyFound(text, key)
+    tf = false;
+    for i = strfind(text, key)
+        after = i + numel(key);
+        if ~isstrprop(key(end), 'digit') || after > numel(text) || ~isstrprop(text(after), 'digit')
+            tf = true;
+            return;
+        end
+    end
+end
+
+%% Local function: sort key that puts "Plastic 2" before "Plastic 10"
+function keys = naturalKey(names)
+    keys = cell(size(names));
+    for i = 1:numel(names)
+        [num, txt] = regexp(lower(names{i}), '\d+', 'match', 'split');
+        k = txt{1};
+        for j = 1:numel(num)
+            k = [k sprintf('%010d', str2double(num{j})) txt{j+1}];
+        end
+        keys{i} = k;
     end
 end
 
