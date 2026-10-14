@@ -3,10 +3,11 @@
 % Figure 1: one material (set "material" below) - stress-strain curve with a
 %   0.2% offset line, uncertainty bars, yield, ultimate and rupture points,
 %   and a table of the lab measurements and results with uncertainties.
-% Figure 2: the materials in "compareMaterials" on one plot - every reading
-%   (extensometer and MTS displacement where both exist) with its own 0.2%
-%   offset line, uncertainty bars and yield point, plus tables comparing the
-%   readings, the materials, and published values.
+% Figure 2: the materials in "compareMaterials" on one plot - the MTS
+%   displacement reading of each (plus the extensometer reading when
+%   includeExtensometer = true) with its own 0.2% offset line, uncertainty
+%   bars and yield point, plus tables comparing the readings, the
+%   materials, and published values.
 %
 % Folder layout:
 %   MAE Solids datasets\M003\<material folder>\...\<file>.dat
@@ -42,6 +43,8 @@ clear; clc; close all;
 %% ===================== USER SETTINGS =====================
 material = 'Steel';            % <-- material for figure 1 (folder inside M003; not case sensitive, partial name works)
 compareMaterials = {'Steel', 'Aluminum'};   % <-- materials for figure 2 ({} = no figure 2)
+includeExtensometer = false;   % figure 2: false = MTS displacement curves only;
+                               % true = also the extensometer curve where the file has one
 
 baseFolder  = 'C:\Users\jsasso\OneDrive - Syracuse University\MAE Solids datasets';
 testFolder  = 'M003';
@@ -63,7 +66,7 @@ specimens = {
     'cf90|carbonfiber90',         'rect', 2.5110, 0.5240, 0.0605, 2.5640, 0.5205, 0.0600
     'cf45|carbonfiber45|cf40|carbonfiber40', ...
                                   'rect', 2.8900, 0.5145, 0.0565, 2.9610, 0.4705, 0.0615
-    'plastic',                    'rect', 2.0,    NaN,    NaN,    NaN,    NaN,    NaN      % <-- placeholder, enter measurements
+    'plastic',                    'rect', 3.0070, 0.5060, 0.1365, NaN,    NaN,    NaN      % <-- final measurements not entered
     };
 
 % ---- Published values for the percent differences [psi] ----
@@ -213,10 +216,12 @@ if ~isempty(compareMaterials)
     sUnit2 = Ms{1}.sUnit;
     uUnit2 = Ms{1}.uUnit;
 
-    % every reading: extensometer (if the file has it) and MTS displacement
+    % readings to plot: MTS displacement, plus the extensometer if asked for
+    % and the file has it
+    useExt = cellfun(@(c) includeExtensometer && ~isempty(c.rX), Ms);
     R = cell(0, 3);                 % {analyzed curve, legend name, short label}
     for m = 1:numel(Ms)
-        if ~isempty(Ms{m}.rX)
+        if useExt(m)
             R(end+1, :) = {Ms{m}.rX, [Ms{m}.name ' - extensometer'],     [Ms{m}.name ' ext.']};
         end
         R(end+1, :) = {Ms{m}.rD, [Ms{m}.name ' - MTS displacement'], [Ms{m}.name ' MTS']};
@@ -265,7 +270,8 @@ if ~isempty(compareMaterials)
     box(ax2, 'on');
     xlabel(ax2, 'Axial Strain (in/in)');
     ylabel(ax2, Ms{1}.sLabel);
-    title(ax2, ['Stress vs. Strain - ' strjoin(cellfun(@(c) c.name, Ms, 'UniformOutput', false), ' vs. ')], ...
+    if any(useExt), ttl = 'Stress vs. Strain - '; else, ttl = 'Stress vs. Strain (MTS displacement) - '; end
+    title(ax2, [ttl strjoin(cellfun(@(c) c.name, Ms, 'UniformOutput', false), ' vs. ')], ...
         'Interpreter', 'none');
     xlim(ax2, [0, 1.05*eMax]);
     ylim(ax2, [0, 1.12*sMax]);
@@ -280,7 +286,7 @@ if ~isempty(compareMaterials)
     for m = 1:numel(Ms)
         rD = Ms{m}.rD;
         colD = {pm(rD.E, rD.EUnc); pm(rD.sY, rD.sYu); pm(rD.eY, rD.eYu); pm(rD.Ur, rD.Uru)};
-        if ~isempty(Ms{m}.rX)
+        if useExt(m)
             rX = Ms{m}.rX;
             colX = {pm(rX.E, rX.EUnc); pm(rX.sY, rX.sYu); pm(rX.eY, rX.eYu); pm(rX.Ur, rX.Uru)};
             colP = {pdTxt(rD.E, rX.E); pdTxt(rD.sY, rX.sY); pdTxt(rD.eY, rX.eY); ''};
@@ -295,7 +301,7 @@ if ~isempty(compareMaterials)
     % ---- Table 2: materials and published values ----
     % ultimate, rupture and toughness from the MTS displacement curve (the
     % extensometer comes off before the ultimate); yield and E from the
-    % extensometer when the file has it, MTS displacement otherwise
+    % extensometer when it is plotted, MTS displacement otherwise
     labels2 = {['Ultimate stress (' sUnit2 ')']; 'Strain at ultimate (in/in)'; ...
                ['Rupture stress (' sUnit2 ')']; 'Strain at rupture (in/in)'; ...
                ['True rupture stress (' sUnit2 ')']; 'True rupture strain (in/in)'; ...
@@ -308,7 +314,7 @@ if ~isempty(compareMaterials)
     for m = 1:numel(Ms)
         Mm = Ms{m};
         pD = Mm.pD;
-        if ~isempty(Mm.rX), best = Mm.rX; else, best = Mm.rD; end
+        if useExt(m), best = Mm.rX; else, best = Mm.rD; end
         vals = [pD.sU pD.sUu; pD.eU pD.eUu; pD.sR pD.sRu; pD.eR pD.eRu; ...
                 Mm.sTR Mm.sTRu; Mm.eTR Mm.eTRu; best.sY best.sYu; best.E best.EUnc; pD.UT pD.UTu];
         [pub, pubName] = lookupPublished(published, Mm.name);
@@ -344,8 +350,13 @@ if ~isempty(compareMaterials)
     uitable(fig2, 'Data', T2, 'ColumnName', cols2, 'RowName', [], 'Units', 'normalized', ...
         'Position', [0.49 0.22 0.50 0.42], 'FontSize', 10, ...
         'ColumnWidth', [{210}, repmat({140, 80, 65}, 1, numel(Ms))]);
-    note = {['Ultimate, rupture and toughness use the MTS displacement strain; yield and E use ' ...
-             'the extensometer where the file has it.'], ...
+    if any(useExt)
+        strainNote = ['Ultimate, rupture and toughness use the MTS displacement strain; yield and E use ' ...
+                      'the extensometer where it is plotted.'];
+    else
+        strainNote = 'All strains are from the MTS crosshead displacement.';
+    end
+    note = {strainNote, ...
             'True rupture: stress = rupture load / final area, strain = ln(initial area / final area).', ...
             'Percent difference = |measured - reference| / reference x 100 (reference: extensometer or published).', ...
             ['Published: ' strjoin(pubNames, '; ')]};
