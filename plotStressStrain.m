@@ -75,8 +75,8 @@ specimens = {
 % <-- replace with the alloys / values from your lab handout
 published = {
 %   keys       name                        yield    ultimate  rupture  Young's modulus
-    'steel',   'AISI 1018 cold drawn',     53700,   63800,    NaN,     29.7e6     % <-- enter published rupture stress
-    'alum',    '6061-T6',                  40000,   45000,    NaN,     10.0e6     % <-- enter published rupture stress
+    'steel',   'AISI 1018 cold drawn',     53700,   63800,    79770,   29.7e6
+    'alum',    '6061-T6',                  40000,   45000,    42060,   10.0e6
     };
 
 % ---- Measurement uncertainties ----
