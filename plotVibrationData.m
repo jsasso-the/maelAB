@@ -1,11 +1,12 @@
-function plotVibration(fileType, beamLength, experiment)
-% PLOTVIBRATION  Amplitude vs. frequency plot (with uncertainties and a
+% PLOTVIBRATIONDATA  Amplitude vs. frequency plot (with uncertainties and a
 % scaled theoretical curve) for one file of the cantilever-beam vibration lab.
 %
-%   plotVibration('dat',    16, 'a')   % hammer test, frequency file  (..._16_adat.txt)
-%   plotVibration('fft',    20, 'b')   % hammer test, time-series file (..._20_bfft.txt)
-%   plotVibration('shaker', 24, 'a')   % shaker test                  (Shaker24_inch_A.txt)
-%   plotVibration                      % uses the defaults in USER SETTINGS below
+% HOW TO USE: paste this whole script into a new MATLAB script (any name that
+% is not a MATLAB function name, e.g. plotVibrationData.m), set fileType,
+% beamLength and experiment under "CHOOSE THE FILE" below, and press Run.
+%   fileType = 'dat'    -> hammer test, frequency file   (..._16_adat.txt)
+%   fileType = 'fft'    -> hammer test, time-series file (..._20_bfft.txt)
+%   fileType = 'shaker' -> shaker test                   (Shaker24_inch_A.txt)
 %
 % The data are found automatically:
 %   <mainFolder>\Vibrations datasets.zip  ->  Vibrations datasets\<groupFolder>\<file>.txt
@@ -43,11 +44,14 @@ function plotVibration(fileType, beamLength, experiment)
 %   [6] Second-order magnitude ratio: McGill ECSE 304 Lecture 30
 %       https://cim.mcgill.ca/~boulet/304-303B/1999/L30.pdf
 
+clear; clc; close all;
+
+%% ===================== CHOOSE THE FILE =====================
+fileType   = 'dat';            % 'dat', 'fft' or 'shaker'
+beamLength = 16;               % beam length [in]: 16, 20 or 24
+experiment = 'a';              % 'a' or 'b'
+
 %% ===================== USER SETTINGS =====================
-% ---- Defaults used when the function is called without inputs ----
-defaultType       = 'dat';     % 'dat', 'fft' or 'shaker'
-defaultLength     = 16;        % beam length [in]: 16, 20 or 24
-defaultExperiment = 'a';       % 'a' or 'b'
 
 % ---- Folder structure ----
 mainFolder    = 'C:\Users\jsasso\OneDrive - Syracuse University\MAE Vibrations';
@@ -95,10 +99,6 @@ nErrorBars    = 40;            % hammer files: number of points that get error b
 freqLim        = [];           % [fmin fmax] in Hz; [] = automatic
 showTimeSeries = true;         % 'fft' files: also plot the time series
 %% =========================================================
-
-if nargin < 1 || isempty(fileType),   fileType   = defaultType;       end
-if nargin < 2 || isempty(beamLength), beamLength = defaultLength;     end
-if nargin < 3 || isempty(experiment), experiment = defaultExperiment; end
 
 fileType   = lower(char(fileType));
 experiment = lower(char(experiment));
@@ -329,7 +329,6 @@ summary = {sprintf('f_{n,theory} = %.2f \\pm %.2f Hz', fnBeam, uFnBeam), ...
            sprintf('\\zeta = %.4f \\pm %.4f', zeta, uZeta)};
 text(0.02, 0.97, summary, 'Units', 'normalized', 'VerticalAlignment', 'top', ...
      'BackgroundColor', 'w', 'EdgeColor', [0.7 0.7 0.7], 'FontSize', 9);
-end
 
 %% ===================== Local functions =====================
 
