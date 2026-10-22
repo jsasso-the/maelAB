@@ -3,8 +3,8 @@
 %
 % HOW TO USE: paste this whole script into a new MATLAB script (any name that
 % is not a MATLAB function name, e.g. plotVibrationData.m), set fileType,
-% beamLengths, experiment and normalizeFreq under "CHOOSE THE FILE" below,
-% and press Run. One figure is made for each beam length.
+% beamLength, experiment and normalizeFreq under "CHOOSE THE FILE" below,
+% and press Run.
 %   fileType = 'dat'    -> hammer test, frequency file   (..._16_adat.txt)
 %   fileType = 'fft'    -> hammer test, time-series file (..._20_bfft.txt)
 %   fileType = 'shaker' -> shaker test                   (Shaker24_inch_A.txt)
@@ -27,7 +27,7 @@
 %   zeta from the hammer time series, log decrement (eqs 5, 6)
 %   R(w) = 1 / sqrt((1 - r^2)^2 + (2*zeta*r)^2),  r = w/wn
 %   theo = R .* w.^2 .* (max measured response / max(R .* w.^2))
-%   Normalized plots: x = f / fn,theory (theoretical undamped fn from eqs 3, 4),
+%   Normalized plot: x = f / fn,theory (theoretical undamped fn from eqs 3, 4),
 %   u_x = sqrt((u_f/fn)^2 + (f*u_fn/fn^2)^2).
 %   Measured fn: hammer peak is the damped frequency, wn = wd/sqrt(1-zeta^2) (eq 7);
 %                shaker peak is the resonance,       wn = wr/sqrt(1-2*zeta^2) (eq 8).
@@ -39,19 +39,16 @@
 %       https://www.totalmateria.com/en-us/material/1250012
 %   [3] NI-9234 Specifications: gain error 0.34 % max (calibrated, 1 year, 5 Vpk range)
 %       https://ni.com/docs/en-US/bundle/ni-9234-specs
-%   [4] McMaster-Carr, cold-drawn low-carbon steel bar (ASTM A108), 1 in wide:
-%       thickness tolerance +/-0.003 in, width tolerance +/-0.009 in
-%       https://www.mcmaster.com/product/7702N55/
-%   [5] Effective tip mass of a cantilever, Meff = 0.2357*M (= 33/140): US Patent 6,526,835
+%   [4] Effective tip mass of a cantilever, Meff = 0.2357*M (= 33/140): US Patent 6,526,835
 %       https://image-ppubs.uspto.gov/dirsearch-public/print/downloadPdf/6526835
-%   [6] Second-order magnitude ratio: McGill ECSE 304 Lecture 30
+%   [5] Second-order magnitude ratio: McGill ECSE 304 Lecture 30
 %       https://cim.mcgill.ca/~boulet/304-303B/1999/L30.pdf
 
 clear; clc; close all;
 
 %% ===================== CHOOSE THE FILE =====================
-fileType      = 'shaker';      % 'dat', 'fft' or 'shaker'
-beamLengths   = [16 20 24];    % one or more of 16, 20, 24 [in]; one figure each
+fileType      = 'dat';         % 'dat', 'fft' or 'shaker'
+beamLength    = 16;            % vibrating beam length [in]: 16, 20 or 24
 experiment    = 'a';           % 'a' or 'b'
 normalizeFreq = true;          % true:  x-axis = f / fn,theory (normalized frequency)
                                % false: x-axis = frequency in Hz
@@ -64,24 +61,26 @@ zipName       = 'Vibrations datasets.zip';   % zip file inside mainFolder
 datasetFolder = 'Vibrations datasets';       % folder inside the zip
 groupFolder   = 'M003';                      % group folder inside datasetFolder
 
-% ---- Beam (procedure, section 3.1) ----
-beam.width     = 1.00;         % b [in]
-beam.thick     = 0.25;         % h [in]
+% ---- Beam (measured, carbon steel) ----
+lb2kg = 0.45359237;
+beam.width       = 0.9985;     % b [in]
+beam.thick       = 0.288;      % h [in]
+beam.totalMass   = 2.07*lb2kg; % overall beam mass [kg] (2.07 lb)
+beam.totalLength = 29.5;       % overall beam length [in]
+% Vibrating mass (procedure): m_beam = (L / totalLength) * totalMass.
+% Set totalMass = [] to use the density instead.
 beam.E         = 200e9;        % Young's modulus [Pa]          [1]
-beam.rho       = 7870;         % density [kg/m^3]              [1]
+beam.rho       = 7870;         % density [kg/m^3], only used if totalMass = []  [1]
 beam.endMass   = 0;            % end mass [kg] (procedure: end-weight = 0)
-% Measured beam mass (procedure, "Experimental Procedure"). If both are given,
-% m_beam = (L / totalLength) * totalMass; leave [] to use the density instead.
-beam.totalMass   = [];         % overall beam mass [kg]
-beam.totalLength = [];         % overall beam length [in]
 
 % ---- Beam uncertainties ----
-beam.uLength = 1/32;           % [in] half of the 1/16 in tape-measure division
-beam.uWidth  = 0.009;          % [in]                          [4]
-beam.uThick  = 0.003;          % [in]                          [4]
-beam.uE      = 10e9;           % [Pa]  half the 190-210 GPa spread  [2]
-beam.uRho    = 100;            % [kg/m^3] ~ half the 7.67-7.87 g/cc spread [1,2]
-beam.uTotalMass = 0;           % [kg] scale uncertainty, if totalMass is used
+beam.uLength      = 1/32;      % [in] vibrating length, half of the 1/16 in tape division
+beam.uTotalLength = 1/32;      % [in] overall length, same tape
+beam.uWidth       = 0.0005;    % [in] half of the 0.001 in caliper division
+beam.uThick       = 0.0005;    % [in] half of the 0.001 in caliper division
+beam.uTotalMass   = 0.005*lb2kg; % [kg] half of the 0.01 lb scale division
+beam.uE           = 10e9;      % [Pa]  half the 190-210 GPa spread  [2]
+beam.uRho         = 100;       % [kg/m^3] ~ half the 7.67-7.87 g/cc spread [1,2]
 
 % ---- Theoretical curve ----
 theoryFnSource = 'beam';       % 'beam' = fn from beam theory (eqs 3, 4)
@@ -110,266 +109,253 @@ experiment = lower(char(experiment));
 if ~ismember(fileType, {'dat', 'fft', 'shaker'})
     error('fileType must be ''dat'', ''fft'' or ''shaker''.');
 end
-if ~all(ismember(beamLengths, [16 20 24]))
-    error('Lengths must be 16, 20 or 24 (inches).');
+if ~ismember(beamLength, [16 20 24])
+    error('Length must be 16, 20 or 24 (inches).');
 end
 if ~ismember(experiment, {'a', 'b'})
     error('Experiment must be ''a'' or ''b''.');
 end
 
-%% Locate the data folder
-dataDir = findDataFolder(mainFolder, zipName, datasetFolder, groupFolder);
-freqLimUser = freqLim;
+%% Locate the folder and the file
+dataDir  = findDataFolder(mainFolder, zipName, datasetFolder, groupFolder);
+filePath = findDataFile(dataDir, fileType, beamLength, experiment);
+[~, fName, fExt] = fileparts(filePath);
+fprintf('\nUsing file: %s\n', filePath);
 
-%% One figure per beam length
-for beamLength = beamLengths
-    try
-        freqLim = freqLimUser;
+%% Theoretical natural frequency from the beam properties
+[fnBeam, uFnBeam] = beamNaturalFrequency(beamLength, beam);
 
-        % Locate the file
-        filePath = findDataFile(dataDir, fileType, beamLength, experiment);
-        [~, fName, fExt] = fileparts(filePath);
-        fprintf('\nUsing file: %s\n', filePath);
-
-        % Theoretical natural frequency from the beam properties
-        [fnBeam, uFnBeam] = beamNaturalFrequency(beamLength, beam);
-
-        % Read the data and build amplitude vs. frequency with uncertainties
-        relPct = sqrt(daqGainPct^2 + accelPct^2);
-        isHammer = ~strcmp(fileType, 'shaker');
-        switch fileType
-            case 'shaker'
-                M = readmatrix(filePath, 'FileType', 'text', 'NumHeaderLines', 0, 'Delimiter', '\t');
-                f = M(:,2);
-                A = M(:,3);
-                % The last rows can repeat a frequency (leftover data): keep only
-                % the first reading at each frequency.
-                [~, keep] = unique(f, 'first');
-                keep = sort(keep);
-                if numel(keep) < numel(f)
-                    fprintf('Removed %d repeated-frequency row(s).\n', numel(f) - numel(keep));
-                end
-                f = f(keep);
-                A = A(keep);
-                uF = shakerFreqUnc * ones(size(f));
-                uA = sqrt(shakerAmpRes^2 + (relPct/100 * A).^2);
-                ampLabel = 'Output Amplitude';
-
-            otherwise   % hammer test, 'dat' or 'fft'
-                M = readmatrix(filePath, 'FileType', 'text', 'NumHeaderLines', 1, 'Delimiter', '\t');
-                x = M(:,1);
-                y = M(:,2);              % beam output
-                if isTimeFile(filePath)
-                    % Time series: single-sided amplitude spectrum of the beam output
-                    tSig = x;
-                    ySig = y;
-                    dt = mean(diff(x));
-                    N  = numel(y);
-                    Y  = fft(y - mean(y));
-                    P  = abs(Y(1:floor(N/2)+1)) / N;
-                    P(2:end-1) = 2*P(2:end-1);
-                    f = (0:floor(N/2))' / (N*dt);
-                    A = P;
-                else
-                    % Frequency data: drop the zero-padded part above the Nyquist frequency
-                    last = find(y ~= 0, 1, 'last');
-                    f = x(1:last);
-                    A = y(1:last);
-                end
-                df = f(2) - f(1);
-                noiseFloor = median(A(2:end));
-                uF = df/2 * ones(size(f));
-                uA = sqrt(noiseFloor^2 + (relPct/100 * A).^2);
-                ampLabel = 'Amplitude (V\times10^2)';
+%% Read the data and build amplitude vs. frequency with uncertainties
+relPct = sqrt(daqGainPct^2 + accelPct^2);
+isHammer = ~strcmp(fileType, 'shaker');
+switch fileType
+    case 'shaker'
+        M = readmatrix(filePath, 'FileType', 'text', 'NumHeaderLines', 0, 'Delimiter', '\t');
+        f = M(:,2);
+        A = M(:,3);
+        % The last rows can repeat a frequency (leftover data): keep only
+        % the first reading at each frequency.
+        [~, keep] = unique(f, 'first');
+        keep = sort(keep);
+        if numel(keep) < numel(f)
+            fprintf('Removed %d repeated-frequency row(s).\n', numel(f) - numel(keep));
         end
+        f = f(keep);
+        A = A(keep);
+        uF = shakerFreqUnc * ones(size(f));
+        uA = sqrt(shakerAmpRes^2 + (relPct/100 * A).^2);
+        ampLabel = 'Output Amplitude';
 
-        % Measured peak (first mode)
+    otherwise   % hammer test, 'dat' or 'fft'
+        M = readmatrix(filePath, 'FileType', 'text', 'NumHeaderLines', 1, 'Delimiter', '\t');
+        x = M(:,1);
+        y = M(:,2);              % beam output
+        if isTimeFile(filePath)
+            % Time series: single-sided amplitude spectrum of the beam output
+            tSig = x;
+            ySig = y;
+            dt = mean(diff(x));
+            N  = numel(y);
+            Y  = fft(y - mean(y));
+            P  = abs(Y(1:floor(N/2)+1)) / N;
+            P(2:end-1) = 2*P(2:end-1);
+            f = (0:floor(N/2))' / (N*dt);
+            A = P;
+        else
+            % Frequency data: drop the zero-padded part above the Nyquist frequency
+            last = find(y ~= 0, 1, 'last');
+            f = x(1:last);
+            A = y(1:last);
+        end
+        df = f(2) - f(1);
+        noiseFloor = median(A(2:end));
+        uF = df/2 * ones(size(f));
+        uA = sqrt(noiseFloor^2 + (relPct/100 * A).^2);
+        ampLabel = 'Amplitude (V\times10^2)';
+end
+
+%% Measured peak (first mode)
+if isHammer
+    % Search near the beam-theory fn so higher modes are not picked up
+    win = find(f >= 0.5*fnBeam & f <= 1.5*fnBeam);
+    [Apk, k] = max(A(win));
+    iPk = win(k);
+else
+    [Apk, iPk] = max(A);
+end
+fPk = f(iPk);
+
+%% Damping ratio: log decrement of the hammer time series (eqs 5, 6)
+if isempty(theoryZeta)
+    [zeta, uZeta, zetaSrc] = dampingFromHammer(dataDir, beamLength, experiment, ...
+                                               fnBeam, logDecCycles, logDecSkip);
+    if isnan(zeta)
         if isHammer
-            % Search near the beam-theory fn so higher modes are not picked up
-            win = find(f >= 0.5*fnBeam & f <= 1.5*fnBeam);
-            [Apk, k] = max(A(win));
-            iPk = win(k);
-        else
-            [Apk, iPk] = max(A);
-        end
-        fPk = f(iPk);
-
-        % Damping ratio: log decrement of the hammer time series (eqs 5, 6)
-        if isempty(theoryZeta)
-            [zeta, uZeta, zetaSrc] = dampingFromHammer(dataDir, beamLength, experiment, ...
-                                                       fnBeam, logDecCycles, logDecSkip);
-            if isnan(zeta)
-                if isHammer
-                    zeta = halfPowerZeta(f, A, iPk);
-                    uZeta = 0;
-                    zetaSrc = 'half-power bandwidth of this file (log decrement failed)';
-                else
-                    error(['Could not get zeta from the %d in hammer data by log decrement. ' ...
-                           'Set theoryZeta in USER SETTINGS.'], beamLength);
-                end
-            end
-        else
-            zeta = theoryZeta;
+            zeta = halfPowerZeta(f, A, iPk);
             uZeta = 0;
-            zetaSrc = 'user setting';
-        end
-
-        % Measured natural frequency (eq 7 for the hammer, eq 8 for the shaker)
-        if isHammer
-            fnMeas = fPk / sqrt(1 - zeta^2);
+            zetaSrc = 'half-power bandwidth of this file (log decrement failed)';
         else
-            fnMeas = fPk / sqrt(1 - 2*zeta^2);
+            error(['Could not get zeta from the %d in hammer data by log decrement. ' ...
+                   'Set theoryZeta in USER SETTINGS.'], beamLength);
         end
-        uFnMeas = uF(iPk);
+    end
+else
+    zeta = theoryZeta;
+    uZeta = 0;
+    zetaSrc = 'user setting';
+end
 
-        % Natural frequency used for the theoretical curve
-        if ~isempty(theoryFn)
-            fn = theoryFn;  uFn = 0;  fnSrc = 'user setting';
-        elseif strcmpi(theoryFnSource, 'measured')
-            fn = fnMeas;    uFn = uFnMeas;  fnSrc = 'measured peak';
-        else
-            fn = fnBeam;    uFn = uFnBeam;  fnSrc = 'beam theory';
-        end
+%% Measured natural frequency (eq 7 for the hammer, eq 8 for the shaker)
+if isHammer
+    fnMeas = fPk / sqrt(1 - zeta^2);
+else
+    fnMeas = fPk / sqrt(1 - 2*zeta^2);
+end
+uFnMeas = uF(iPk);
 
-        % Frequency range
-        if isempty(freqLim)
-            if isHammer
-                freqLim = [0, 3*max(fn, fPk)];
-            else
-                lo = min([f; fn - uFn]);
-                hi = max([f; fn + uFn]);
-                pad = max(2, 0.15*(hi - lo));
-                freqLim = [max(0, lo - pad), hi + pad];
-            end
-        end
+%% Natural frequency used for the theoretical curve
+if ~isempty(theoryFn)
+    fn = theoryFn;  uFn = 0;  fnSrc = 'user setting';
+elseif strcmpi(theoryFnSource, 'measured')
+    fn = fnMeas;    uFn = uFnMeas;  fnSrc = 'measured peak';
+else
+    fn = fnBeam;    uFn = uFnBeam;  fnSrc = 'beam theory';
+end
 
-        % X axis: frequency in Hz, or normalized by the theoretical undamped fn
-        if normalizeFreq
-            xScale = fnBeam;
-            uX = sqrt((uF/fnBeam).^2 + (f*uFnBeam/fnBeam^2).^2);
-            xLabelStr = 'Normalized Frequency  f / f_{n,theory}';
-            % The fn,theory uncertainty is already in the horizontal error bars, so the
-            % theory band only carries it when the theory curve uses another fn.
-            if strcmp(fnSrc, 'beam theory'), uFnBand = 0; else, uFnBand = uFn; end
-        else
-            xScale = 1;
-            uX = uF;
-            xLabelStr = 'Frequency (Hz)';
-            uFnBand = uFn;
-        end
-
-        % Theoretical curve: R*w^2 scaled to the measured maximum, plus an
-        % uncertainty band from fn +/- u_fn and zeta +/- u_zeta
-        fnSet   = fn + uFnBand*[0 -1 1 -1 1];
-        zetaSet = max(zeta + uZeta*[0 -1 -1 1 1], 1e-4);
-        fTheo = linspace(max(freqLim(1), 1e-3), freqLim(2), 2000)';
-        for i = 1:numel(fnSet)
-            % Extra points around each fn so a sharp (lightly damped) peak is not missed
-            fTheo = [fTheo; fnSet(i)*(1 + (-5:0.01:5)'*zetaSet(i))]; %#ok<AGROW>
-        end
-        fTheo = unique(fTheo(fTheo >= freqLim(1) & fTheo <= freqLim(2) & fTheo > 0));
-        theoAll = zeros(numel(fTheo), numel(fnSet));
-        for i = 1:numel(fnSet)
-            theoAll(:,i) = theoryCurve(fTheo, fnSet(i), zetaSet(i), Apk);
-        end
-        [theo, scale] = theoryCurve(fTheo, fn, zeta, Apk);
-        theoLo = min(theoAll, [], 2);
-        theoHi = max(theoAll, [], 2);
-
-        % Results in the command window
-        pctDiff = 100*(fnMeas - fnBeam)/fnBeam;
-        fprintf('Theoretical fn (beam)   = %.2f +/- %.2f Hz\n', fnBeam, uFnBeam);
-        fprintf('Measured peak           = %.4g at %.2f Hz\n', Apk, fPk);
-        fprintf('Measured fn (eq %d)      = %.2f +/- %.2f Hz  (%+.1f %% vs. theory)\n', ...
-                7 + ~isHammer, fnMeas, uFnMeas, pctDiff);
-        fprintf('Damping ratio zeta      = %.4f +/- %.4f  (%s)\n', zeta, uZeta, zetaSrc);
-        fprintf('Theory curve: fn = %.2f Hz (%s), scale factor = %.4g\n', fn, fnSrc, scale);
-        if normalizeFreq
-            fprintf('Measured fn / fn,theory = %.3f +/- %.3f\n', fnMeas/fnBeam, ...
-                    sqrt((uFnMeas/fnBeam)^2 + (fnMeas*uFnBeam/fnBeam^2)^2));
-        end
-
-        % Plot
-        if isHammer
-            plotTitle = sprintf('Hammer %s: %d in, experiment %s', upper(fileType), beamLength, upper(experiment));
-        else
-            plotTitle = sprintf('Shaker: %d in, experiment %s', beamLength, upper(experiment));
-        end
-
-        if normalizeFreq, plotType = 'Normalized Frequency'; else, plotType = 'Frequency'; end
-        fig = figure('Name', plotTitle, 'NumberTitle', 'off');
-        twoTiles = strcmp(fileType, 'fft') && showTimeSeries;
-        if twoTiles
-            fig.Position = [100 100 900 750];
-            tl = tiledlayout(2, 1, 'TileSpacing', 'compact');
-            title(tl, plotTitle, 'Interpreter', 'none');
-            nexttile;
-            plot(tSig, ySig, 'LineWidth', 1);
-            xlabel('Time (s)');
-            ylabel('Beam output (V\times10^2)');
-            title('Time Series');
-            grid on;
-            axis tight;
-            nexttile;
-        else
-            fig.Position = [100 100 900 500];
-        end
-
-        blue = [0 0.3 0.7];
-        red  = [0.85 0.1 0.1];
-        hold on;
-        fill([fTheo; flipud(fTheo)]/xScale, [theoHi; flipud(theoLo)], red, 'EdgeColor', 'none', ...
-             'FaceAlpha', 0.15, 'DisplayName', 'Theory uncertainty (f_n, \zeta)');
-        if isHammer
-            inRange = find(f >= freqLim(1) & f <= freqLim(2));
-            % Shaded uncertainty band, the measured spectrum, and error bars on a subset
-            fill([f(inRange); flipud(f(inRange))]/xScale, ...
-                 [A(inRange) + uA(inRange); flipud(max(A(inRange) - uA(inRange), 0))], ...
-                 blue, 'EdgeColor', 'none', 'FaceAlpha', 0.25, ...
-                 'DisplayName', 'Measurement uncertainty');
-            plot(f(inRange)/xScale, A(inRange), '-', 'Color', blue, 'LineWidth', 1.2, ...
-                 'DisplayName', 'Measured');
-            step = max(1, round(numel(inRange)/nErrorBars));
-            eb = unique([inRange(1:step:end); iPk]);
-            errorbar(f(eb)/xScale, A(eb), uA(eb), uA(eb), uX(eb), uX(eb), 'o', ...
-                     'Color', blue, 'MarkerSize', 4, 'MarkerFaceColor', blue, ...
-                     'CapSize', 4, 'DisplayName', 'Error bars');
-        else
-            errorbar(f/xScale, A, uA, uA, uX, uX, 'o', 'Color', blue, ...
-                     'MarkerSize', 6, 'MarkerFaceColor', blue, 'LineWidth', 1.2, ...
-                     'CapSize', 6, 'DisplayName', 'Measured');
-        end
-        plot(fTheo/xScale, theo, '--', 'Color', red, 'LineWidth', 1.5, ...
-             'DisplayName', sprintf('Theory (f_n = %.2f Hz, \\zeta = %.4f)', fn, zeta));
-        hold off;
-
-        xlabel(xLabelStr);
-        ylabel(ampLabel);
-        if twoTiles
-            title(['Amplitude vs. ' plotType]);
-        else
-            title({plotTitle, ['Amplitude vs. ' plotType]});
-        end
-        subtitle([fName fExt], 'Interpreter', 'none');
-        xlim(freqLim/xScale);
-        ylim([0, 1.15*max([Apk + uA(iPk); theoHi])]);
-        grid on;
-        legend('Location', 'northeast');
-
-        % Summary box
-        summary = {sprintf('f_{n,theory} = %.2f \\pm %.2f Hz', fnBeam, uFnBeam), ...
-                   sprintf('f_{n,measured} = %.2f \\pm %.2f Hz (%+.1f%%)', fnMeas, uFnMeas, pctDiff), ...
-                   sprintf('\\zeta = %.4f \\pm %.4f', zeta, uZeta)};
-        if normalizeFreq
-            summary{end+1} = sprintf('x-axis divided by f_{n,theory} = %.2f Hz', fnBeam);
-        end
-        text(0.02, 0.97, summary, 'Units', 'normalized', 'VerticalAlignment', 'top', ...
-             'BackgroundColor', 'w', 'EdgeColor', [0.7 0.7 0.7], 'FontSize', 9);
-
-    catch err
-        warning('Skipped %d in: %s', beamLength, err.message);
+%% Frequency range
+if isempty(freqLim)
+    if isHammer
+        freqLim = [0, 3*max(fn, fPk)];
+    else
+        lo = min([f; fn - uFn]);
+        hi = max([f; fn + uFn]);
+        pad = max(2, 0.15*(hi - lo));
+        freqLim = [max(0, lo - pad), hi + pad];
     end
 end
+
+%% X axis: frequency in Hz, or normalized by the theoretical undamped fn
+if normalizeFreq
+    xScale = fnBeam;
+    uX = sqrt((uF/fnBeam).^2 + (f*uFnBeam/fnBeam^2).^2);
+    xLabelStr = 'Normalized Frequency  f / f_{n,theory}';
+    % The fn,theory uncertainty is already in the horizontal error bars, so the
+    % theory band only carries it when the theory curve uses another fn.
+    if strcmp(fnSrc, 'beam theory'), uFnBand = 0; else, uFnBand = uFn; end
+else
+    xScale = 1;
+    uX = uF;
+    xLabelStr = 'Frequency (Hz)';
+    uFnBand = uFn;
+end
+
+%% Theoretical curve: R*w^2 scaled to the measured maximum, plus an
+%% uncertainty band from fn +/- u_fn and zeta +/- u_zeta
+fnSet   = fn + uFnBand*[0 -1 1 -1 1];
+zetaSet = max(zeta + uZeta*[0 -1 -1 1 1], 1e-4);
+fTheo = linspace(max(freqLim(1), 1e-3), freqLim(2), 2000)';
+for i = 1:numel(fnSet)
+    % Extra points around each fn so a sharp (lightly damped) peak is not missed
+    fTheo = [fTheo; fnSet(i)*(1 + (-5:0.01:5)'*zetaSet(i))]; %#ok<AGROW>
+end
+fTheo = unique(fTheo(fTheo >= freqLim(1) & fTheo <= freqLim(2) & fTheo > 0));
+theoAll = zeros(numel(fTheo), numel(fnSet));
+for i = 1:numel(fnSet)
+    theoAll(:,i) = theoryCurve(fTheo, fnSet(i), zetaSet(i), Apk);
+end
+[theo, scale] = theoryCurve(fTheo, fn, zeta, Apk);
+theoLo = min(theoAll, [], 2);
+theoHi = max(theoAll, [], 2);
+
+%% Results in the command window
+pctDiff = 100*(fnMeas - fnBeam)/fnBeam;
+fprintf('Theoretical fn (beam)   = %.2f +/- %.2f Hz\n', fnBeam, uFnBeam);
+fprintf('Measured peak           = %.4g at %.2f Hz\n', Apk, fPk);
+fprintf('Measured fn (eq %d)      = %.2f +/- %.2f Hz  (%+.1f %% vs. theory)\n', ...
+        7 + ~isHammer, fnMeas, uFnMeas, pctDiff);
+fprintf('Damping ratio zeta      = %.4f +/- %.4f  (%s)\n', zeta, uZeta, zetaSrc);
+fprintf('Theory curve: fn = %.2f Hz (%s), scale factor = %.4g\n', fn, fnSrc, scale);
+if normalizeFreq
+    fprintf('Measured fn / fn,theory = %.3f +/- %.3f\n', fnMeas/fnBeam, ...
+            sqrt((uFnMeas/fnBeam)^2 + (fnMeas*uFnBeam/fnBeam^2)^2));
+end
+
+%% Plot
+if isHammer
+    plotTitle = sprintf('Hammer %s: %d in, experiment %s', upper(fileType), beamLength, upper(experiment));
+else
+    plotTitle = sprintf('Shaker: %d in, experiment %s', beamLength, upper(experiment));
+end
+
+if normalizeFreq, plotType = 'Normalized Frequency'; else, plotType = 'Frequency'; end
+fig = figure('Name', plotTitle, 'NumberTitle', 'off');
+twoTiles = strcmp(fileType, 'fft') && showTimeSeries;
+if twoTiles
+    fig.Position = [100 100 900 750];
+    tl = tiledlayout(2, 1, 'TileSpacing', 'compact');
+    title(tl, plotTitle, 'Interpreter', 'none');
+    nexttile;
+    plot(tSig, ySig, 'LineWidth', 1);
+    xlabel('Time (s)');
+    ylabel('Beam output (V\times10^2)');
+    title('Time Series');
+    grid on;
+    axis tight;
+    nexttile;
+else
+    fig.Position = [100 100 900 500];
+end
+
+blue = [0 0.3 0.7];
+red  = [0.85 0.1 0.1];
+hold on;
+fill([fTheo; flipud(fTheo)]/xScale, [theoHi; flipud(theoLo)], red, 'EdgeColor', 'none', ...
+     'FaceAlpha', 0.15, 'DisplayName', 'Theory uncertainty (f_n, \zeta)');
+if isHammer
+    inRange = find(f >= freqLim(1) & f <= freqLim(2));
+    % Shaded uncertainty band, the measured spectrum, and error bars on a subset
+    fill([f(inRange); flipud(f(inRange))]/xScale, ...
+         [A(inRange) + uA(inRange); flipud(max(A(inRange) - uA(inRange), 0))], ...
+         blue, 'EdgeColor', 'none', 'FaceAlpha', 0.25, ...
+         'DisplayName', 'Measurement uncertainty');
+    plot(f(inRange)/xScale, A(inRange), '-', 'Color', blue, 'LineWidth', 1.2, ...
+         'DisplayName', 'Measured');
+    step = max(1, round(numel(inRange)/nErrorBars));
+    eb = unique([inRange(1:step:end); iPk]);
+    errorbar(f(eb)/xScale, A(eb), uA(eb), uA(eb), uX(eb), uX(eb), 'o', ...
+             'Color', blue, 'MarkerSize', 4, 'MarkerFaceColor', blue, ...
+             'CapSize', 4, 'DisplayName', 'Error bars');
+else
+    errorbar(f/xScale, A, uA, uA, uX, uX, 'o', 'Color', blue, ...
+             'MarkerSize', 6, 'MarkerFaceColor', blue, 'LineWidth', 1.2, ...
+             'CapSize', 6, 'DisplayName', 'Measured');
+end
+plot(fTheo/xScale, theo, '--', 'Color', red, 'LineWidth', 1.5, ...
+     'DisplayName', sprintf('Theory (f_n = %.2f Hz, \\zeta = %.4f)', fn, zeta));
+hold off;
+
+xlabel(xLabelStr);
+ylabel(ampLabel);
+if twoTiles
+    title(['Amplitude vs. ' plotType]);
+else
+    title({plotTitle, ['Amplitude vs. ' plotType]});
+end
+subtitle([fName fExt], 'Interpreter', 'none');
+xlim(freqLim/xScale);
+ylim([0, 1.15*max([Apk + uA(iPk); theoHi])]);
+grid on;
+legend('Location', 'northeast');
+
+% Summary box
+summary = {sprintf('f_{n,theory} = %.2f \\pm %.2f Hz', fnBeam, uFnBeam), ...
+           sprintf('f_{n,measured} = %.2f \\pm %.2f Hz (%+.1f%%)', fnMeas, uFnMeas, pctDiff), ...
+           sprintf('\\zeta = %.4f \\pm %.4f', zeta, uZeta)};
+if normalizeFreq
+    summary{end+1} = sprintf('x-axis divided by f_{n,theory} = %.2f Hz', fnBeam);
+end
+text(0.02, 0.97, summary, 'Units', 'normalized', 'VerticalAlignment', 'top', ...
+     'BackgroundColor', 'w', 'EdgeColor', [0.7 0.7 0.7], 'FontSize', 9);
 
 %% ===================== Local functions =====================
 
@@ -378,10 +364,10 @@ function [fn, uFn] = beamNaturalFrequency(Lin, beam)
 % uncertainty by propagating each input's uncertainty (root-sum-square).
     p  = [Lin, beam.width, beam.thick, beam.E, beam.rho];
     up = [beam.uLength, beam.uWidth, beam.uThick, beam.uE, beam.uRho];
-    useMass = ~isempty(beam.totalMass) && ~isempty(beam.totalLength);
+    useMass = ~isempty(beam.totalMass);
     if useMass
-        p  = [p,  beam.totalMass];
-        up = [up, beam.uTotalMass];
+        p  = [p,  beam.totalMass,  beam.totalLength];
+        up = [up, beam.uTotalMass, beam.uTotalLength];
     end
     fn = fnOf(p);
     dfn = zeros(size(p));
@@ -398,7 +384,7 @@ function [fn, uFn] = beamNaturalFrequency(Lin, beam)
         I = b*h^3/12;
         k = 3*E*I/L^3;
         if useMass
-            m = (v(1)/beam.totalLength) * v(6);
+            m = (v(1)/v(7)) * v(6);
         else
             m = rho*b*h*L;
         end
