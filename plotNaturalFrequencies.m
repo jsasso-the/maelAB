@@ -15,8 +15,9 @@
 %               fr = fn*sqrt(1 - 2*zeta^2)                 (eq 8)
 %   Shaker    : fr = frequency of the largest shaker output
 %               fn = fr/sqrt(1 - 2*zeta^2)                 (eq 8)
-% The top panel shows fn and fr; because zeta is small they almost coincide,
-% so the bottom panel shows the difference fn - fr.
+% The left panel shows fn and the right panel fr, each with error bars and
+% value labels. Because zeta is small, fn and fr differ by well under 1 mHz;
+% that difference is printed in the command window.
 % Uncertainties are propagated by root-sum-square of each input's
 % uncertainty (fn, fd, fr, zeta, beam dimensions, E).
 %
@@ -137,82 +138,86 @@ for j = 1:nL
             pm(fnS(j), uFnS(j), 3), pm(frS(j), uFrS(j), 3));
 end
 
-%% Plot
+%% fn - fr in the command window (too small to see on the plot)
+fprintf('\nfn - fr (theory) = fn*[1 - sqrt(1 - 2*zeta^2)]:\n');
+for j = 1:nL
+    fprintf('  %d in: %.4f mHz\n', beamLengths(j), 1000*(fnT(j) - frT(j)));
+end
+
+%% Plot: f_n (left) and f_r (right) vs. beam length, all lengths together
 blue   = [0 0.3 0.7];
 red    = [0.85 0.1 0.1];
 green  = [0.1 0.55 0.2];
 uL     = beam.uLength * ones(1, nL);
-dx     = 0.25;                 % small horizontal offsets so the markers don't overlap
+dx     = 0.6;                  % horizontal offset so theory/hammer/shaker don't overlap
+Lc     = linspace(min(beamLengths) - 3, max(beamLengths) + 3, 200);
 
-fig = figure('Name', 'Natural and resonance frequencies', 'NumberTitle', 'off');
-fig.Position = [100 100 900 800];
-tl = tiledlayout(2, 1, 'TileSpacing', 'compact');
-title(tl, sprintf('Undamped Natural and Resonance Frequencies vs. Beam Length (experiment %s)', ...
-                  upper(experiment)));
-
-% --- Top: fn and fr vs. length ---
-nexttile;
-hold on;
-% Continuous beam-theory fn(L) with its uncertainty band
-Lc = linspace(min(beamLengths) - 2, max(beamLengths) + 2, 200);
+% Continuous beam-theory fn(L) and fr(L) (fr uses the zeta of the nearest length)
 fnC = zeros(size(Lc));  uFnC = zeros(size(Lc));
 for i = 1:numel(Lc)
     [fnC(i), uFnC(i)] = beamNaturalFrequency(Lc(i), beam);
 end
-fill([Lc fliplr(Lc)], [fnC + uFnC, fliplr(fnC - uFnC)], red, 'EdgeColor', 'none', ...
-     'FaceAlpha', 0.12, 'DisplayName', 'Theory f_n(L) uncertainty');
-plot(Lc, fnC, '-', 'Color', red, 'LineWidth', 1, 'DisplayName', 'Theory f_n(L)');
-
-errorbar(beamLengths - dx, fnT, uFnT, uFnT, uL, uL, 's', 'Color', red, ...
-         'MarkerFaceColor', red, 'MarkerSize', 7, 'LineWidth', 1.2, 'DisplayName', 'f_n theory');
-errorbar(beamLengths - dx, frT, uFrT, uFrT, uL, uL, 's', 'Color', red, ...
-         'MarkerSize', 11, 'LineWidth', 1.2, 'DisplayName', 'f_r theory');
-errorbar(beamLengths, fnH, uFnH, uFnH, uL, uL, 'o', 'Color', blue, ...
-         'MarkerFaceColor', blue, 'MarkerSize', 7, 'LineWidth', 1.2, 'DisplayName', 'f_n hammer');
-errorbar(beamLengths, frH, uFrH, uFrH, uL, uL, 'o', 'Color', blue, ...
-         'MarkerSize', 11, 'LineWidth', 1.2, 'DisplayName', 'f_r hammer');
-errorbar(beamLengths + dx, fnS, uFnS, uFnS, uL, uL, '^', 'Color', green, ...
-         'MarkerFaceColor', green, 'MarkerSize', 7, 'LineWidth', 1.2, 'DisplayName', 'f_n shaker');
-errorbar(beamLengths + dx, frS, uFrS, uFrS, uL, uL, '^', 'Color', green, ...
-         'MarkerSize', 11, 'LineWidth', 1.2, 'DisplayName', 'f_r shaker');
-hold off;
-xlabel('Beam Length (in)');
-ylabel('Frequency (Hz)');
-title('Natural (filled) and Resonance (open) Frequencies');
-xticks(beamLengths);
-xlim([min(Lc) max(Lc)]);
-grid on;
-legend('Location', 'northeast');
-
-% --- Bottom: fn - fr, which is too small to see in the top panel ---
-nexttile;
-dfun = @(x) x(1)*(1 - sqrt(1 - 2*x(2)^2));     % fn - fr in terms of fn and zeta
-[dT, uDT, dH, uDH, dS, uDS] = deal(NaN(1, nL));
-for j = 1:nL
-    if isnan(zeta(j)), continue; end
-    [dT(j), uDT(j)] = propagate(dfun, [fnT(j) zeta(j)], [uFnT(j) uZeta(j)]);
-    if ~isnan(fnH(j))
-        [dH(j), uDH(j)] = propagate(dfun, [fnH(j) zeta(j)], [uFnH(j) uZeta(j)]);
-    end
-    if ~isnan(fnS(j))
-        [dS(j), uDS(j)] = propagate(dfun, [fnS(j) zeta(j)], [uFnS(j) uZeta(j)]);
-    end
+okZ = ~isnan(zeta);
+if nnz(okZ) >= 2
+    zC = interp1(beamLengths(okZ), zeta(okZ), Lc, 'nearest', 'extrap');
+else
+    zC = max([zeta(okZ) 0]) * ones(size(Lc));
 end
-hold on;
-errorbar(beamLengths - dx, 1000*dT, 1000*uDT, 1000*uDT, uL, uL, 's', 'Color', red, ...
-         'MarkerFaceColor', red, 'MarkerSize', 7, 'LineWidth', 1.2, 'DisplayName', 'Theory');
-errorbar(beamLengths, 1000*dH, 1000*uDH, 1000*uDH, uL, uL, 'o', 'Color', blue, ...
-         'MarkerFaceColor', blue, 'MarkerSize', 7, 'LineWidth', 1.2, 'DisplayName', 'Hammer');
-errorbar(beamLengths + dx, 1000*dS, 1000*uDS, 1000*uDS, uL, uL, '^', 'Color', green, ...
-         'MarkerFaceColor', green, 'MarkerSize', 7, 'LineWidth', 1.2, 'DisplayName', 'Shaker');
-hold off;
-xlabel('Beam Length (in)');
-ylabel('f_n - f_r (mHz)');
-title('Difference Between Natural and Resonance Frequency  (f_n - f_r = f_n[1 - \surd(1 - 2\zeta^2)])');
-xticks(beamLengths);
-xlim([min(Lc) max(Lc)]);
-grid on;
-legend('Location', 'northeast');
+frC = fnC .* sqrt(1 - 2*zC.^2);
+
+fig = figure('Name', 'Natural and resonance frequencies', 'NumberTitle', 'off');
+fig.Position = [50 100 1400 600];
+tl = tiledlayout(1, 2, 'TileSpacing', 'compact');
+title(tl, sprintf('Undamped Natural and Resonance Frequencies vs. Beam Length (experiment %s)', ...
+                  upper(experiment)));
+subtitle(tl, sprintf('\\zeta from the hammer test (log decrement): %s', ...
+         strjoin(arrayfun(@(j) sprintf('%d in: %.4f \\pm %.4f', beamLengths(j), zeta(j), uZeta(j)), ...
+         1:nL, 'UniformOutput', false), ',   ')));
+
+panels = {
+    'f_n', 'Undamped Natural Frequency  f_n', fnC, uFnC, fnT, uFnT, fnH, uFnH, fnS, uFnS
+    'f_r', 'Resonance Frequency  f_r = f_n\surd(1 - 2\zeta^2)', frC, uFnC, frT, uFrT, frH, uFrH, frS, uFrS
+};
+for pnl = 1:2
+    [sym, ttl, yC, uC, yT, uT, yH, uH, yS, uS] = panels{pnl, :};
+    nexttile;
+    hold on;
+    fill([Lc fliplr(Lc)], [yC + uC, fliplr(yC - uC)], red, 'EdgeColor', 'none', ...
+         'FaceAlpha', 0.12, 'DisplayName', ['Theory ' sym '(L) \pm uncertainty']);
+    plot(Lc, yC, '-', 'Color', red, 'LineWidth', 1, 'DisplayName', ['Theory ' sym '(L)']);
+    errorbar(beamLengths - dx, yT, uT, uT, uL, uL, 's', 'Color', red, 'MarkerFaceColor', red, ...
+             'MarkerSize', 6, 'LineWidth', 1.5, 'CapSize', 12, 'DisplayName', [sym ' theory']);
+    errorbar(beamLengths, yH, uH, uH, uL, uL, 'o', 'Color', blue, 'MarkerFaceColor', blue, ...
+             'MarkerSize', 6, 'LineWidth', 1.5, 'CapSize', 12, 'DisplayName', [sym ' hammer']);
+    errorbar(beamLengths + dx, yS, uS, uS, uL, uL, '^', 'Color', green, 'MarkerFaceColor', green, ...
+             'MarkerSize', 6, 'LineWidth', 1.5, 'CapSize', 12, 'DisplayName', [sym ' shaker']);
+    % Value labels: theory above its point, hammer to the left, shaker to the right
+    for j = 1:nL
+        if ~isnan(yT(j))
+            text(beamLengths(j) - dx, yT(j) + uT(j), sprintf('%.2f \\pm %.2f', yT(j), uT(j)), ...
+                 'Color', red, 'FontSize', 8, 'HorizontalAlignment', 'center', ...
+                 'VerticalAlignment', 'bottom');
+        end
+        if ~isnan(yH(j))
+            text(beamLengths(j) - 0.15, yH(j) - uH(j), sprintf('%.2f \\pm %.2f', yH(j), uH(j)), ...
+                 'Color', blue, 'FontSize', 8, 'HorizontalAlignment', 'right', ...
+                 'VerticalAlignment', 'top');
+        end
+        if ~isnan(yS(j))
+            text(beamLengths(j) + dx + 0.15, yS(j), sprintf('%.2f \\pm %.2f', yS(j), uS(j)), ...
+                 'Color', green, 'FontSize', 8, 'HorizontalAlignment', 'left', ...
+                 'VerticalAlignment', 'middle');
+        end
+    end
+    hold off;
+    xlabel('Beam Length (in)');
+    ylabel([sym ' (Hz)']);
+    title(ttl);
+    xticks(beamLengths);
+    xlim([min(Lc) max(Lc)]);
+    grid on;
+    legend('Location', 'northeast');
+end
 
 %% ===================== Local functions =====================
 
