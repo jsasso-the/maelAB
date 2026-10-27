@@ -60,8 +60,19 @@ dataDir = findDataFolder(mainFolder, dataFolder, zipName);
 
 %% Decide which figures to make
 if ~isempty(customRuns)
-    figs = struct('title', 'Selected Runs', 'runs', customRuns, ...
-                  'labels', {arrayfun(@(x) sprintf('Run %d', x), customRuns, 'UniformOutput', false)});
+    % Label each chosen run with its case name from the groups table
+    allRuns   = [groups.runs];
+    allLabels = [groups.labels];
+    customLabels = cell(size(customRuns));
+    for i = 1:numel(customRuns)
+        j = find(allRuns == customRuns(i), 1);
+        if isempty(j)
+            customLabels{i} = sprintf('Run %d', customRuns(i));
+        else
+            customLabels{i} = allLabels{j};
+        end
+    end
+    figs = struct('title', 'Selected Runs', 'runs', customRuns, 'labels', {customLabels});
 else
     parameter = lower(char(parameter));
     if strcmp(parameter, 'all')
@@ -104,7 +115,7 @@ for g = 1:numel(figs)
         f90 = interp1(lag + (1:numel(lag))'*1e-9, fP, 90);   % tiny ramp keeps x unique
         fMax = max(fMax, max([fM; fP]));
         col = colors(mod(i-1, size(colors,1)) + 1, :);
-        name = sprintf('Run %d: %s', X, labels{i});
+        name = labels{i};                            % e.g. 'L = 16 in', 'Aluminum'
 
         plot(axMag, fM, mag, '-', 'Color', col, 'LineWidth', 1.4, 'DisplayName', name);
         plot(axMag, fM(k), pk, 'v', 'Color', col, 'MarkerFaceColor', col, 'HandleVisibility', 'off');
