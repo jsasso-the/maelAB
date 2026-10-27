@@ -5,11 +5,15 @@
 %   'natres'    : undamped natural (fn) and resonance (fr) frequency vs. beam length
 %   'frf'       : |H(f)| and phase lag vs. frequency of the hammer test
 %   'quad'      : hammer input/output, voltage vs. time and amplitude vs. frequency
+%   'sim'       : simulation runs (Lab Data V), |H(f)| and phase lag, one figure per parameter
 %
 % Data: <mainFolder>\Vibrations datasets\<groupFolder> (the zip is extracted the first time)
 %   hammer 'dat': col 1 frequency [Hz], col 2 beam output, col 3 hammer input
 %   hammer 'fft': col 1 time [s],       col 2 beam output, col 3 hammer input
 %   shaker      : col 2 frequency [Hz], col 3 output amplitude (col 4 ignored)
+% Simulation: <mainFolder>\Lab Data V\10_8_2026jamesXvY.txt, X = run 1-14, Y = 'dat'/'fft'
+%   fft: col 2 = |H(f)|, dat: col 2 = phase angle [deg]; phase lag = -phase angle
+%   runs 1-3 length, 4-8 damping, 9-11 end mass, 12-14 material (procedure section 3)
 % Theory (Vibrations Lab Procedure): k = 3EI/L^3, meq = 33/140 m + m_end, fn = sqrt(k/meq)/2pi
 %   (eqs 3, 4); zeta by log decrement of the hammer time series (eqs 5, 6);
 %   fn = fd/sqrt(1-zeta^2) (eq 7, hammer), fr = fn*sqrt(1-2zeta^2) (eq 8, shaker);
@@ -25,12 +29,14 @@
 clear; clc; close all;
 
 %% ===================== CHOOSE THE PLOT =====================
-plotType      = 'amplitude';   % 'amplitude', 'natres', 'frf' or 'quad'
+plotType      = 'amplitude';   % 'amplitude', 'natres', 'frf', 'quad' or 'sim'
 beamLength    = 24;            % 16, 20 or 24 in (all plots except 'natres')
 experiment    = 'b';           % 'a' or 'b'
 fileType      = 'shaker';      % 'amplitude' only: 'dat', 'fft' or 'shaker'
 normalizeFreq = true;          % 'amplitude' only: x-axis = f / fn,theory
 beamLengths   = [16 20 24];    % 'natres' only
+parameter     = 'material';    % 'sim' only: 'length', 'damping', 'endmass', 'material' or 'all'
+customRuns    = [12 13 14];    % 'sim' only: any runs on one figure; [] = use 'parameter'
 
 %% ===================== USER SETTINGS =====================
 mainFolder    = 'C:\Users\jsasso\OneDrive - Syracuse University\MAE Vibrations';
@@ -69,12 +75,27 @@ quadFreqLim    = [0 250];      % 'quad' [fmin fmax] Hz; [] = up to Nyquist
 timeLim        = [];           % 'quad' [tmin tmax] s; [] = whole record
 showTimeSeries = true;         % 'amplitude' with 'fft' files: also plot the time series
 voltUnit       = 'V\times10^2';% 'quad' y-axis unit (from the file headers)
+
+% Simulation ('sim')
+simFolder    = 'Lab Data V';   % folder inside mainFolder
+simZip       = 'Lab Data V.zip';% used only if the folder is missing
+magType      = 'fft';          % file type (Y) with |H(f)|
+phaseType    = 'dat';          % file type (Y) with the phase angle [deg]
+logMagnitude = true;           % log scale for |H(f)|
+simFreqLim   = [];             % [fmin fmax] Hz for every figure; [] = automatic
+groups = struct('key', {'length', 'damping', 'endmass', 'material'}, ...
+  'title', {'Varying Beam Length', 'Varying Damping Coefficient', 'Varying End Mass', 'Varying Material'}, ...
+  'runs',  {[1 2 3], [4 5 6 7 8], [9 10 11], [12 13 14]}, ...
+  'labels', {{'L = 16 in', 'L = 20 in', 'L = 24 in'}, ...
+             {'c = 1 kg/s', 'c = 3 kg/s', 'c = 5 kg/s', 'c = 7 kg/s', 'c = 9 kg/s'}, ...
+             {'m_{end} = 0.25 kg', 'm_{end} = 0.40 kg', 'm_{end} = 0.65 kg'}, ...
+             {'Carbon steel', 'Stainless steel', 'Aluminum'}});
 %% =========================================================
 
 experiment = lower(char(experiment));  fileType = lower(char(fileType));  plotType = lower(char(plotType));
 assert(ismember(experiment, {'a','b'}), 'Experiment must be ''a'' or ''b''.');
-assert(strcmp(plotType, 'natres') || ismember(beamLength, [16 20 24]), 'Length must be 16, 20 or 24 (inches).');
-dataDir = findDataFolder(mainFolder, zipName, datasetFolder, groupFolder);
+assert(ismember(plotType, {'natres','sim'}) || ismember(beamLength, [16 20 24]), 'Length must be 16, 20 or 24 (inches).');
+if ~strcmp(plotType, 'sim'), dataDir = findDataFolder(mainFolder, zipName, datasetFolder, groupFolder); end
 opt  = {'FileType', 'text', 'Delimiter', '\t'};
 blue = [0 0.3 0.7];  red = [0.85 0.1 0.1];  green = [0.1 0.55 0.2];
 
@@ -343,8 +364,50 @@ case 'quad' % ===== hammer input/output vs. time and frequency (2 x 2) =====
         subtitle(tiles{p,7}, 'Interpreter', 'none');  xlim(tiles{p,8});
     end
 
+case 'sim' % ===== simulation runs: |H(f)| and phase lag, one figure per parameter =====
+    simDir = findSimFolder(mainFolder, simFolder, simZip);
+    if ~isempty(customRuns)   % label each chosen run with its case name from the groups table
+        allRuns = [groups.runs];  allLabels = [groups.labels];  lbl = cell(size(customRuns));
+        for i = 1:numel(customRuns)
+            j = find(allRuns == customRuns(i), 1);
+            if isempty(j), lbl{i} = sprintf('Run %d', customRuns(i)); else, lbl{i} = allLabels{j}; end
+        end
+        figs = struct('title', 'Selected Runs', 'runs', customRuns, 'labels', {lbl});
+    elseif strcmpi(parameter, 'all'), figs = groups;
+    else
+        figs = groups(strcmpi({groups.key}, parameter));
+        if isempty(figs), error('parameter must be ''length'', ''damping'', ''endmass'', ''material'' or ''all''.'); end
+    end
+    colors = lines(7);
+    for g = 1:numel(figs)
+        newFig(figs(g).title, [60 + 40*g, 60 + 30*g, 1000, 800]);
+        tl = tiledlayout(2, 1, 'TileSpacing', 'compact');  title(tl, ['Simulation Frequency Response: ' figs(g).title]);
+        axM = nexttile(1);  hold(axM, 'on');  axP = nexttile(2);  hold(axP, 'on');
+        fprintf('\n===== %s =====\n%-4s %-20s %-14s %-12s %-16s\n', figs(g).title, 'Run', 'Case', 'Peak f [Hz]', 'Peak |H|', 'f at 90 deg [Hz]');
+        fMax = 0;
+        for i = 1:numel(figs(g).runs)
+            X = figs(g).runs(i);  name = figs(g).labels{i};
+            try, [fM, mag] = readRun(simDir, X, magType);  [fP, ph] = readRun(simDir, X, phaseType);
+            catch err, warning('Run %d skipped: %s', X, err.message); continue; end
+            lag = -ph;  [pk, k] = max(mag);                       % phase lag, 0 -> 180 deg
+            f90 = interp1(lag + (1:numel(lag))'*1e-9, fP, 90);    % tiny ramp keeps x unique
+            fMax = max([fMax; fM; fP]);  col = colors(mod(i-1, 7) + 1, :);
+            plot(axM, fM, mag, '-', 'Color', col, 'LineWidth', 1.4, 'DisplayName', name);
+            plot(axM, fM(k), pk, 'v', 'Color', col, 'MarkerFaceColor', col, 'HandleVisibility', 'off');
+            plot(axP, fP, lag, '-', 'Color', col, 'LineWidth', 1.4, 'DisplayName', name);
+            fprintf('%-4d %-20s %-14.2f %-12.4g %-16.2f\n', X, strrep(name, '_{end}', '_end'), fM(k), pk, f90);
+        end
+        if isempty(simFreqLim), xl = [0 fMax]; else, xl = simFreqLim; end
+        axes(axM);  hold off;  lab('Frequency (Hz)', '|H(f)|', 'Magnitude of Response');
+        if logMagnitude, set(axM, 'YScale', 'log'); end
+        xlim(xl);  legend('Location', 'northeast');
+        axes(axP);  hold off;  lab('Frequency (Hz)', 'Phase lag (deg)', 'Phase Angle');
+        yline(90, ':', '90^\circ', 'HandleVisibility', 'off');
+        xlim(xl);  ylim([0 180]);  yticks(0:30:180);  legend('Location', 'southeast');
+    end
+
 otherwise
-    error('plotType must be ''amplitude'', ''natres'', ''frf'' or ''quad''.');
+    error('plotType must be ''amplitude'', ''natres'', ''frf'', ''quad'' or ''sim''.');
 end
 
 %% ===================== Local functions =====================
@@ -476,4 +539,31 @@ function filePath = findDataFile(dataDir, fileType, L, expLetter)
         fprintf('Several files match; using the first:\n');  fprintf('  %s\n', match{:});
     end
     filePath = fullfile(dataDir, match{1});
+end
+
+function dataDir = findSimFolder(mainFolder, folder, zipName)
+% <mainFolder>\<folder>, extracting <zipName> into it if the folder does not exist yet.
+    if ~isfolder(mainFolder), error('Main folder not found: %s', mainFolder); end
+    dataDir = fullfile(mainFolder, folder);
+    if isfolder(dataDir), return; end
+    zipPath = fullfile(mainFolder, zipName);
+    if ~isfile(zipPath)   % accept other spellings, e.g. 'Lab_Data_V.zip'
+        z = dir(fullfile(mainFolder, '*.zip'));  z = z(contains(lower(regexprep({z.name}, '[_ ]', '')), 'labdatav'));
+        if isempty(z), error('Neither the folder "%s" nor a Lab Data V zip file was found in %s.', folder, mainFolder); end
+        zipPath = fullfile(mainFolder, z(1).name);
+    end
+    fprintf('Extracting %s ...\n', zipPath);  unzip(zipPath, dataDir);
+    t = dir(fullfile(dataDir, '**', '*james*.txt'));   % the zip may contain its own folder
+    if ~isempty(t), dataDir = t(1).folder; end
+end
+
+function [f, v] = readRun(dataDir, X, Y)
+% Run X, type Y ('dat'/'fft'): col 1 frequency, col 2 value. Matches 10_8_2026jamesXvY.txt,
+% also with a space before X or an extra digit in the date ('10_8_20261james 3vdat.txt').
+    files = dir(fullfile(dataDir, '*.txt'));  names = {files.name};
+    match = names(~cellfun(@isempty, regexpi(names, sprintf('james\\s*%d\\s*v\\s*%s\\.txt$', X, Y), 'once')));
+    if isempty(match), error('No file for run %d, type ''%s'' in %s.', X, Y, dataDir); end
+    if numel(match) > 1, fprintf('Several files for run %d %s; using %s\n', X, Y, match{1}); end
+    M = readmatrix(fullfile(dataDir, match{1}), 'FileType', 'text', 'NumHeaderLines', 1, 'Delimiter', '\t');
+    f = M(:,1);  v = M(:,2);
 end
